@@ -30,6 +30,11 @@ class Robot:
     
     def turn_in_degrees(self, degrees):
         self.drivebase.turn(degrees)
+    
+    def move_forward(self, distance):
+        """Moves forward in mm."""
+        self.drivebase.straight(distance)
+
 def main():
     robot.drivebase.straight(100)
 
