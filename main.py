@@ -35,10 +35,26 @@ class Robot:
         """Moves forward in mm."""
         self.drivebase.straight(distance)
 
-def main():
-    robot.drivebase.straight(100)
+    def set_speed(self, speed):
+        if speed == 0:
+            speed = ROBOT_SPEED
+        self.drivebase.settings(straight_speed=speed)
 
-robot = Robot()
+def main():
+    robot = Robot()
+
+    while True:
+        # Sense colours below
+        colour_left = robot.colour_sensor_left.color()
+        colour_right = robot.colour_sensor_right.color()
+
+        # Turn if needed
+        if colour_left == Color.BLACK and colour_right == Color.WHITE:
+            robot.turn_in_degrees(-1)
+        elif colour_left == Color.WHITE and colour_right == Color.BLACK:
+            robot.turn_in_degrees(1)
+        else:
+            robot.move_forward(1)
 
 if __name__ == "main":
     main()
