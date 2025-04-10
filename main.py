@@ -27,7 +27,9 @@ class Robot:
             turn_rate=ROBOT_TURN_RATE, 
             turn_acceleration=ROBOT_TURN_ACCELERATION
         )
-
+    
+    def turn_in_degrees(self, degrees):
+        self.drivebase.turn(degrees)
 def main():
     robot.drivebase.straight(100)
 
