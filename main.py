@@ -29,6 +29,7 @@ class Robot:
         )
     
     def turn_in_degrees(self, degrees):
+        """Turns in degrees."""
         self.drivebase.turn(degrees)
     
     def move_forward(self, distance):
@@ -36,6 +37,7 @@ class Robot:
         self.drivebase.straight(distance)
 
     def set_speed(self, speed):
+        """Sets the speed of the robot in drivebase settings."""
         if speed == 0:
             speed = ROBOT_SPEED
         self.drivebase.settings(straight_speed=speed)
@@ -49,11 +51,11 @@ def main():
         colour_right = robot.colour_sensor_right.color()
 
         # Turn if needed
-        if colour_left == Color.BLACK and colour_right == Color.WHITE:
+        if colour_left == Color.BLACK and colour_right == Color.WHITE: # Left
             robot.turn_in_degrees(-1)
-        elif colour_left == Color.WHITE and colour_right == Color.BLACK:
+        elif colour_left == Color.WHITE and colour_right == Color.BLACK: # Right
             robot.turn_in_degrees(1)
-        else:
+        else: # Forward
             robot.move_forward(1)
 
 if __name__ == "main":
