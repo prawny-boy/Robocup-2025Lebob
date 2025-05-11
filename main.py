@@ -53,14 +53,46 @@ class Robot:
             speed = ROBOT_SPEED
         self.drivebase.settings(straight_speed=speed)
 
+    def get_colours(self):
+        self.reflection_left = self.colour_sensor_left.reflection()
+        self.reflection_right = self.colour_sensor_right.reflection()
+        self.colour_left = self.colour_sensor_left.color()
+        self.colour_right = self.colour_sensor_right.color()
+        self.hsv_left = self.colour_sensor_left.hsv()
+        self.hsv_right = self.colour_sensor_right.hsv()
+
+
+        if self.colour_left == Color.WHITE:
+            self.left = Color.WHITE
+        elif self.colour_left == Color.GREEN and self.hsv_left.h > 140 and self.hsv_left.h < 160:
+            self.left = Color.GREEN
+        elif self.colour_left == Color.BLUE and self.hsv_left.s > 80 and self.hsv_left.v > 80:
+            self.left = Color.BLUE
+        elif self.colour_left in [Color.BLUE, Color.BLACK, Color.GREEN] and self.hsv_left.s < 20 and self.reflection_left < 30:
+            self.left = Color.BLACK
+        else: 
+            self.left = Color.NONE
+        
+        if self.colour_right == Color.WHITE:
+            self.right = Color.WHITE
+        elif self.colour_right == Color.GREEN and self.hsv_right.h > 140 and self.hsv_right.h < 160:
+            self.right = Color.GREEN
+        elif self.colour_right == Color.BLUE and self.hsv_right.s > 80 and self.hsv_right.v > 80:
+            self.right = Color.BLUE
+        elif self.colour_right in [Color.BLUE, Color.BLACK, Color.GREEN] and self.hsv_right.s < 20 and self.reflection_right < 30:
+            self.right = Color.BLACK
+        else: 
+            self.right = Color.NONE
+        
+        
+        print(self.left, self.right, self.reflection_left, self.reflection_right, self.colour_left, self.colour_right, self.hsv_left, self.hsv_right)
+
 def main():
     robot = Robot()
 
     while True:
         # Sense colours below
-        reflection_left = robot.colour_sensor_left.reflection()
-        reflection_right = robot.colour_sensor_right.reflection()
-        print(reflection_left, reflection_right)
+        robot.get_colours()
 
         # Turn if needed
         if False:
