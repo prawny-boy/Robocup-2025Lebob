@@ -80,20 +80,20 @@ class Robot:
         self.left_color = self.information_to_color(self.left_color_sensor_information)
         self.right_color = self.information_to_color(self.right_color_sensor_information)
 
+    def run(self):
+        while True:
+            self.get_colors()
+
+            if False:
+                if self.left_color == Color.BLACK and self.right_color == Color.WHITE: # Left
+                    self.turn_in_degrees(-1)
+                elif self.left_color == Color.WHITE and self.right_color == Color.BLACK: # Right
+                    self.turn_in_degrees(1)
+                else: # Forward
+                    self.move_forward(1)
+
 def main():
     robot = Robot()
-
-    while True:
-        # Sense colors below
-        robot.get_colors()
-
-        # Turn if needed
-        if False:
-            if color_left == Color.BLACK and color_right == Color.WHITE: # Left
-                robot.turn_in_degrees(-1)
-            elif color_left == Color.WHITE and color_right == Color.BLACK: # Right
-                robot.turn_in_degrees(1)
-            else: # Forward
-                robot.move_forward(1)
+    robot.run()
 
 main()
