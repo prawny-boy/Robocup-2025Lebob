@@ -13,8 +13,8 @@ ROBOT_TURN_ACCELERATION = 3000
 ports = {
     "left_drive": Port.E,
     "right_drive": Port.C,
-    "colour_sensor_left": Port.D,
-    "colour_sensor_right": Port.A,
+    "color_sensor_left": Port.D,
+    "color_sensor_right": Port.A,
     "ultrasonic_sensor": Port.B,
     "arm_motor": Port.F,
 }
@@ -25,8 +25,8 @@ class Robot:
         self.left_drive = Motor(ports["left_drive"])
         self.right_drive = Motor(ports["right_drive"])
 
-        self.colour_sensor_left = ColorSensor(ports["colour_sensor_left"])
-        self.colour_sensor_right = ColorSensor(ports["colour_sensor_right"])
+        self.color_sensor_left = ColorSensor(ports["color_sensor_left"])
+        self.color_sensor_right = ColorSensor(ports["color_sensor_right"])
         self.ultrasonic_sensor = UltrasonicSensor(ports["ultrasonic_sensor"])
         self.arm_motor = Motor(ports["arm_motor"])
 
@@ -52,53 +52,31 @@ class Robot:
         if speed == 0:
             speed = ROBOT_SPEED
         self.drivebase.settings(straight_speed=speed)
-
-    def get_colours(self):
-        self.reflection_left = self.colour_sensor_left.reflection()
-        self.reflection_right = self.colour_sensor_right.reflection()
-        self.colour_left = self.colour_sensor_left.color()
-        self.colour_right = self.colour_sensor_right.color()
-        self.hsv_left = self.colour_sensor_left.hsv()
-        self.hsv_right = self.colour_sensor_right.hsv()
-
-
-        if self.colour_left == Color.WHITE:
-            self.left = Color.WHITE
-        elif self.colour_left == Color.GREEN and self.hsv_left.h > 140 and self.hsv_left.h < 160:
-            self.left = Color.GREEN
-        elif self.colour_left == Color.BLUE and self.hsv_left.s > 80 and self.hsv_left.v > 80:
-            self.left = Color.BLUE
-        elif self.colour_left in [Color.BLUE, Color.BLACK, Color.GREEN] and self.hsv_left.s < 20 and self.reflection_left < 30:
-            self.left = Color.BLACK
-        else: 
-            self.left = Color.NONE
-        
-        if self.colour_right == Color.WHITE:
-            self.right = Color.WHITE
-        elif self.colour_right == Color.GREEN and self.hsv_right.h > 140 and self.hsv_right.h < 160:
-            self.right = Color.GREEN
-        elif self.colour_right == Color.BLUE and self.hsv_right.s > 80 and self.hsv_right.v > 80:
-            self.right = Color.BLUE
-        elif self.colour_right in [Color.BLUE, Color.BLACK, Color.GREEN] and self.hsv_right.s < 20 and self.reflection_right < 30:
-            self.right = Color.BLACK
-        else: 
-            self.right = Color.NONE
-        
-        
-        print(self.left, self.right, self.reflection_left, self.reflection_right, self.colour_left, self.colour_right, self.hsv_left, self.hsv_right)
+    
+    def get_colors(self):
+        self.left_color_sensor_information = {
+            "reflection": self.color_sensor_left.reflection(),
+            "color": self.color_sensor_left.color(),
+            "hsv": self.color_sensor_left.hsv(),
+        }
+        self.right_color_sensor_information = {
+            "reflection": self.color_sensor_right.reflection(),
+            "color": self.color_sensor_right.color(),
+            "hsv": self.color_sensor_right.hsv(),
+        }        
 
 def main():
     robot = Robot()
 
     while True:
-        # Sense colours below
-        robot.get_colours()
+        # Sense colors below
+        robot.get_colors()
 
         # Turn if needed
         if False:
-            if colour_left == Color.BLACK and colour_right == Color.WHITE: # Left
+            if color_left == Color.BLACK and color_right == Color.WHITE: # Left
                 robot.turn_in_degrees(-1)
-            elif colour_left == Color.WHITE and colour_right == Color.BLACK: # Right
+            elif color_left == Color.WHITE and color_right == Color.BLACK: # Right
                 robot.turn_in_degrees(1)
             else: # Forward
                 robot.move_forward(1)
