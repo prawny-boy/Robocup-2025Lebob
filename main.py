@@ -54,12 +54,18 @@ class Robot:
         self.drivebase.settings(straight_speed=speed)
 
     def information_to_color(self, information):
-        if information["color"] == Color.WHITE:
+        if information["color"] == Color.WHITE and information["hsv"].v > 80 and information["reflection"] == 100:
+            return Color.GRAY
+        elif information["color"] == Color.WHITE:
             return Color.WHITE
-        elif information["color"] == Color.GREEN and information["hsv"].h > 140 and information["hsv"].h < 160:
+        elif information["color"] == Color.GREEN and information["hsv"].h > 135 and information["hsv"].h < 165:
             return Color.GREEN
         elif information["color"] == Color.BLUE and information["hsv"].s > 80 and information["hsv"].v > 80:
             return Color.BLUE
+        elif information["color"] == Color.RED and information["hsv"].s > 85:
+            return Color.RED
+        elif information["color"] == Color.RED: # information["hsv"].s <= 85
+            return Color.ORANGE
         elif information["color"] in [Color.BLUE, Color.BLACK, Color.GREEN] and information["hsv"].s < 20 and information["reflection"] < 30:
             return Color.BLACK
         else: 
@@ -87,10 +93,15 @@ class Robot:
             self.turn_in_degrees(1)
         else: # Forward
             self.move_forward(1)
+
+    def debug(self):            
+        print(self.left_color_sensor_information, self.left_color, self.right_color)
     
     def run(self):
         while True:
             self.get_colors()
+            # self.move()
+            self.debug()
 
 def main():
     robot = Robot()
