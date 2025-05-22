@@ -137,13 +137,23 @@ class Robot:
         self.left_color = self.information_to_color(self.left_color_sensor_information)
         self.right_color = self.information_to_color(self.right_color_sensor_information)
 
-    def turn_green(self, direction):
+    def green(self, direction):
         if direction == "left":
             degrees = -75
         else:
             degrees = 75
-
         self.drivebase.curve(75, degrees, Stop.COAST, True)
+    
+    def grey(self):
+        self.drivebase.straight(100) # go to middle of green area
+        while self.ultrasonic_sensor.distance() == 2000: # wait for the ultrasonic sensor to detect something
+            self.short_turn_in_degrees(5)
+        self.start_motors(ROBOT_FORWARD_SPEED, ROBOT_FORWARD_SPEED) # drive forward
+        while not self.ultrasonic_sensor.distance() < 80:
+            pass
+        self.stop_motors() # stop
+        self.arm_motor.run_until_stalled(100) # move the arm
+
 
     def update(self):
         self.get_colors()
@@ -208,10 +218,10 @@ class Robot:
         # green
         elif self.robot_state == "green left":
             self.stop_motors()
-            self.turn_green("left")
+            self.green("left")
         elif self.robot_state == "green right":
             self.stop_motors()
-            self.turn_green("right")
+            self.green("right")
 
         # stop
         elif self.robot_state == "stop":
@@ -239,6 +249,7 @@ def rescale(value, in_min, in_max, out_min, out_max):
 def main():
     robot = Robot()
     robot.battery_display()
+    robot.arm_motor.run_until_stalled(500, duty_limit=30) # move the arm
     print("Calibrating...")
     robot.intro_sound()
     robot.run()
