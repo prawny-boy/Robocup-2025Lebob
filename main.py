@@ -43,9 +43,9 @@ class Robot:
 
         self.current_direction = "straight"
     
-    def turn_in_degrees(self, degrees):
+    def turn_in_degrees(self, degrees=ROBOT_TURNING_DEGREES):
         """Turns in degrees."""
-        self.drivebase.turn(degrees)
+        self.drivebase.curve(25, degrees, Stop.COAST, False)
     
     def move_forward(self, distance, speed=None):
         """Moves forward in mm."""
