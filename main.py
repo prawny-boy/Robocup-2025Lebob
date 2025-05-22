@@ -9,8 +9,8 @@ ROBOT_SPEED = 500
 ROBOT_ACCELERATION = 750
 ROBOT_TURN_RATE = 750
 ROBOT_TURN_ACCELERATION = 3000
-ROBOT_MOVE_SPEED = 400
-ROBOT_TURNING_DEGREES = 10
+ROBOT_MOVE_SPEED = 350
+ROBOT_TURNING_DEGREES = 6
 
 ports = {
     "left_drive": Port.E,
@@ -102,6 +102,14 @@ class Robot:
         self.left_color = self.information_to_color(self.left_color_sensor_information)
         self.right_color = self.information_to_color(self.right_color_sensor_information)
 
+    def turn_green(self, direction):
+        if direction == "left":
+            degrees = -75
+        else:
+            degrees = 75
+
+        self.drivebase.curve(75, degrees, Stop.COAST, True)
+
     def update(self):
         # forward
         if self.left_color == Color.WHITE and self.right_color == Color.WHITE:
@@ -112,6 +120,12 @@ class Robot:
             self.current_direction = "new left" # new will mean that it will stop then turn
         elif self.right_color == Color.BLACK and self.current_direction != "right":
             self.current_direction = "new right"
+
+        # green
+        elif self.left_color == Color.GREEN:
+            self.current_direction = "green left"
+        elif self.right_color == Color.GREEN:
+            self.current_direction = "green right"
 
     def move(self):
         if self.current_direction == "straight":
@@ -130,6 +144,14 @@ class Robot:
             self.current_direction = "right"
         elif self.current_direction == "right": # right, no stopping
             self.turn_in_degrees(ROBOT_TURNING_DEGREES)
+        
+        # green
+        elif self.current_direction == "green left":
+            self.stop_motors()
+            self.turn_green("left")
+        elif self.current_direction == "green right":
+            self.stop_motors()
+            self.turn_green("right")
         
     def debug(self):            
         print(self.current_direction)
