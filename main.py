@@ -22,7 +22,7 @@ ports = {
 class Robot:
     def __init__(self):
         self.hub = PrimeHub(Axis.Z, Axis.X)
-        self.left_drive = Motor(ports["left_drive"])
+        self.left_drive = Motor(ports["left_drive"], positive_direction=Direction.COUNTERCLOCKWISE)
         self.right_drive = Motor(ports["right_drive"])
 
         self.color_sensor_left = ColorSensor(ports["color_sensor_left"])
@@ -38,6 +38,10 @@ class Robot:
             turn_rate=ROBOT_TURN_RATE, 
             turn_acceleration=ROBOT_TURN_ACCELERATION
         )
+
+        self.left_ticks_on_green = 0
+        self.right_ticks_on_green = 0
+        self.green_turn_cooldown = 0
     
     def turn_in_degrees(self, degrees):
         """Turns in degrees."""
@@ -54,7 +58,7 @@ class Robot:
         self.drivebase.settings(straight_speed=speed)
 
     def information_to_color(self, information):
-        if information["color"] == Color.WHITE and information["hsv"].v > 80 and information["reflection"] == 100:
+        if information["reflection"] == 100:
             return Color.GRAY
         elif information["color"] == Color.WHITE:
             return Color.WHITE
@@ -86,21 +90,49 @@ class Robot:
         self.left_color = self.information_to_color(self.left_color_sensor_information)
         self.right_color = self.information_to_color(self.right_color_sensor_information)
 
-    def move(self):
-        if self.left_color == Color.BLACK and self.right_color == Color.WHITE: # Left
-            self.turn_in_degrees(-1)
-        elif self.left_color == Color.WHITE and self.right_color == Color.BLACK: # Right
-            self.turn_in_degrees(1)
-        else: # Forward
-            self.move_forward(1)
+    def update(self):
+        self.green_turn_cooldown += 1
+        if self.left_color == Color.GREEN:
+            self.left_ticks_on_green += 1
+        else:
+            self.left_ticks_on_green = 0
+        
+        if self.right_color == Color.GREEN:
+            self.right_ticks_on_green += 1
+        else:
+            self.right_ticks_on_green = 0
 
+    def move(self):
+        if self.left_color == Color.WHITE and self.right_color == Color.WHITE:
+            self.move_forward(5)
+        elif self.left_color == Color.BLACK and self.right_color == Color.WHITE:
+            self.turn_in_degrees(-2)
+        elif self.left_color == Color.WHITE and self.right_color == Color.BLACK:
+            self.turn_in_degrees(2)
+        
+        if self.green_turn_cooldown >= 20:
+            if self.left_ticks_on_green >= 5:
+                self.move_forward(80)
+                self.turn_in_degrees(-90)
+                self.move_forward(50)
+                green_turn_cooldown = 0
+            elif self.right_ticks_on_green >= 5:
+                self.move_forward(80)
+                self.turn_in_degrees(90)
+                self.move_forward(50)
+                green_turn_cooldown = 0
+            else:
+                self.move_forward(2)
+    #     elif self.left_color == Color.LEFT and self.right_color == Color.RIGHT:
+    #         self.action()
     def debug(self):            
-        print(self.left_color_sensor_information, self.left_color, self.right_color)
+        print(self.left_ticks_on_green, self.right_ticks_on_green, self.green_turn_cooldown)
     
     def run(self):
         while True:
             self.get_colors()
-            # self.move()
+            self.update()
+            self.move()
             self.debug()
 
 def main():
