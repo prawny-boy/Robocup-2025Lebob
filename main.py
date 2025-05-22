@@ -9,6 +9,8 @@ ROBOT_SPEED = 500
 ROBOT_ACCELERATION = 750
 ROBOT_TURN_RATE = 750
 ROBOT_TURN_ACCELERATION = 3000
+LOW_VOLTAGE = 7000
+HIGH_VOLTAGE = 8300
 
 # Robot Behavior
 ROBOT_FORWARD_SPEED = 350
@@ -44,7 +46,27 @@ class Robot:
         )
 
         self.robot_state = "obstacle"
-    
+
+    def battery_display(self):
+        # display battery of hub
+        v = self.hub.battery.voltage()
+        vPct = rescale(v, LOW_VOLTAGE, HIGH_VOLTAGE, 1, 100)
+        print(f"Battery %: {round(vPct, 1)}, Voltage: {v}")
+        if vPct < 70:
+            if vPct < 40:
+                print("EMERGENCY: BATTERY LOW!")
+                battery_status_light = Color.RED
+            else:
+                print("Battery is below 70% Please charge!")
+                battery_status_light = Color.YELLOW
+            self.status_light(battery_status_light)
+        else:
+            self.status_light(Color.GREEN)
+
+    def status_light(self, color):
+        self.hub.light.off()
+        self.hub.light.on(color)
+
     def turn_in_degrees(self, degrees=ROBOT_TURNING_INCREMENT):
         """Turns in degrees."""
         self.drivebase.curve(25, degrees, Stop.COAST, False)
@@ -191,10 +213,21 @@ class Robot:
         print(f"LC: {self.left_color} RC: {self.right_color} U: {self.ultrasonic} S: {self.robot_state}{" "*30}")
     
     def run(self):
+        self.battery_display()
         while True:
             self.update()
             self.move()
             self.debug()
+
+def rescale(value, in_min, in_max, out_min, out_max):
+    neg = value / abs(value) # will either be 1 or -1
+    value = abs(value)
+    if value < in_min: value = in_min
+    if value > in_max: value = in_max
+    retvalue = (value - in_min) * (out_max / (in_max - in_min))
+    if retvalue > out_max: retvalue = out_max
+    if retvalue < out_min: retvalue = out_min
+    return retvalue * neg
 
 def main():
     robot = Robot()
