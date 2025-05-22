@@ -9,7 +9,7 @@ ROBOT_SPEED = 500
 ROBOT_ACCELERATION = 750
 ROBOT_TURN_RATE = 750
 ROBOT_TURN_ACCELERATION = 3000
-ROBOT_MOVE_SPEED = 5
+ROBOT_MOVE_SPEED = 400
 
 ports = {
     "left_drive": Port.E,
@@ -40,9 +40,6 @@ class Robot:
             turn_acceleration=ROBOT_TURN_ACCELERATION
         )
 
-        self.left_ticks_on_green = 0
-        self.right_ticks_on_green = 0
-        self.green_turn_cooldown = 0
         self.current_direction = "straight"
     
     def turn_in_degrees(self, degrees):
@@ -56,8 +53,10 @@ class Robot:
         self.drivebase.straight(distance)
     
     def start_motors(self, left_speed, right_speed):
-        self.left_drive.run(left_speed)
-        self.right_drive.run(right_speed)
+        if not self.left_drive.speed() == left_speed:
+            self.left_drive.run(left_speed)
+        if not self.right_drive.speed() == right_speed:
+            self.right_drive.run(right_speed)
     
     def stop_motors(self):
         self.left_drive.stop()
@@ -114,13 +113,13 @@ class Robot:
         if self.current_direction == "straight":
             self.start_motors(ROBOT_MOVE_SPEED, ROBOT_MOVE_SPEED)
         elif self.current_direction == "left":
-            self.start_motors(-ROBOT_MOVE_SPEED, ROBOT_MOVE_SPEED)
+            self.stop_motors()
+            self.turn_in_degrees(-10)
         elif self.current_direction == "right":
-            self.start_motors(ROBOT_MOVE_SPEED, -ROBOT_MOVE_SPEED)
-
+            self.stop_motors()
+            self.turn_in_degrees(10)
     def debug(self):            
         return
-        print(self.left_ticks_on_green, self.right_ticks_on_green, self.green_turn_cooldown)
     
     def run(self):
         while True:
