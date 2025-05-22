@@ -47,6 +47,14 @@ class Robot:
 
         self.robot_state = "obstacle"
 
+    def intro_sound(self):
+        # play intro sound
+        self.hub.speaker.volume(50)
+        # Definitely not bolero trust
+        self.hub.speaker.play_notes([
+            "C5/4.", "B4/16_", "C5/16", "D5/16_", "C5/16", "B4/16_", "A4/16", "C5/16", "R/16", "C5/16_", "A4/16", "C5/4"
+        ])
+
     def battery_display(self):
         # display battery of hub
         v = self.hub.battery.voltage()
@@ -213,7 +221,6 @@ class Robot:
         print(f"LC: {self.left_color} RC: {self.right_color} U: {self.ultrasonic} S: {self.robot_state}{" "*30}")
     
     def run(self):
-        self.battery_display()
         while True:
             self.update()
             self.move()
@@ -231,6 +238,9 @@ def rescale(value, in_min, in_max, out_min, out_max):
 
 def main():
     robot = Robot()
+    robot.battery_display()
+    print("Calibrating...")
+    robot.intro_sound()
     robot.run()
 
 main()
