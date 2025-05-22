@@ -85,7 +85,7 @@ class Robot:
             return Color.RED
         elif information["color"] == Color.RED: # information["hsv"].s <= 85
             return Color.ORANGE
-        elif information["color"] in [Color.BLUE, Color.BLACK, Color.GREEN] and information["hsv"].s < 20 and information["reflection"] < 30:
+        elif information["hsv"].s < 20 and information["reflection"] < 30 and information["reflection"] > 3:
             return Color.BLACK
         else: 
             return Color.NONE
@@ -186,13 +186,13 @@ class Robot:
             self.stop_motors()
         
     def debug(self):       
-        print()
+        print(self.left_color_sensor_information, self.left_color)
     
     def run(self):
         while True:
             self.update()
             self.move()
-            # self.debug()
+            self.debug()
 
 def main():
     robot = Robot()
