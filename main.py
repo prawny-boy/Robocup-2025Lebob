@@ -9,6 +9,7 @@ ROBOT_SPEED = 500
 ROBOT_ACCELERATION = 750
 ROBOT_TURN_RATE = 750
 ROBOT_TURN_ACCELERATION = 3000
+ROBOT_MOVE_SPEED = 5
 
 ports = {
     "left_drive": Port.E,
@@ -42,14 +43,25 @@ class Robot:
         self.left_ticks_on_green = 0
         self.right_ticks_on_green = 0
         self.green_turn_cooldown = 0
+        self.current_direction = "straight"
     
     def turn_in_degrees(self, degrees):
         """Turns in degrees."""
         self.drivebase.turn(degrees)
     
-    def move_forward(self, distance):
+    def move_forward(self, distance, speed=None):
         """Moves forward in mm."""
+        if speed is not None:
+            self.set_speed(speed)
         self.drivebase.straight(distance)
+    
+    def start_motors(self, left_speed, right_speed):
+        self.left_drive.run(left_speed)
+        self.right_drive.run(right_speed)
+    
+    def stop_motors(self):
+        self.left_drive.stop()
+        self.right_drive.stop()
 
     def set_speed(self, speed):
         """Sets the speed of the robot in drivebase settings."""
@@ -91,41 +103,23 @@ class Robot:
         self.right_color = self.information_to_color(self.right_color_sensor_information)
 
     def update(self):
-        self.green_turn_cooldown += 1
-        if self.left_color == Color.GREEN:
-            self.left_ticks_on_green += 1
-        else:
-            self.left_ticks_on_green = 0
-        
-        if self.right_color == Color.GREEN:
-            self.right_ticks_on_green += 1
-        else:
-            self.right_ticks_on_green = 0
+        if self.left_color == Color.WHITE and self.right_color == Color.WHITE:
+            self.current_direction = "straight"
+        elif self.left_color == Color.BLACK:
+            self.current_direction = "left"
+        elif self.right_color == Color.BLACK:
+            self.current_direction = "right"
 
     def move(self):
-        if self.left_color == Color.WHITE and self.right_color == Color.WHITE:
-            self.move_forward(5)
-        elif self.left_color == Color.BLACK and self.right_color == Color.WHITE:
-            self.turn_in_degrees(-2)
-        elif self.left_color == Color.WHITE and self.right_color == Color.BLACK:
-            self.turn_in_degrees(2)
-        
-        if self.green_turn_cooldown >= 20:
-            if self.left_ticks_on_green >= 5:
-                self.move_forward(80)
-                self.turn_in_degrees(-90)
-                self.move_forward(50)
-                green_turn_cooldown = 0
-            elif self.right_ticks_on_green >= 5:
-                self.move_forward(80)
-                self.turn_in_degrees(90)
-                self.move_forward(50)
-                green_turn_cooldown = 0
-            else:
-                self.move_forward(2)
-    #     elif self.left_color == Color.LEFT and self.right_color == Color.RIGHT:
-    #         self.action()
+        if self.current_direction == "straight":
+            self.start_motors(ROBOT_MOVE_SPEED, ROBOT_MOVE_SPEED)
+        elif self.current_direction == "left":
+            self.start_motors(-ROBOT_MOVE_SPEED, ROBOT_MOVE_SPEED)
+        elif self.current_direction == "right":
+            self.start_motors(ROBOT_MOVE_SPEED, -ROBOT_MOVE_SPEED)
+
     def debug(self):            
+        return
         print(self.left_ticks_on_green, self.right_ticks_on_green, self.green_turn_cooldown)
     
     def run(self):
@@ -133,7 +127,7 @@ class Robot:
             self.get_colors()
             self.update()
             self.move()
-            self.debug()
+            # self.debug()
 
 def main():
     robot = Robot()
