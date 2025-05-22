@@ -52,7 +52,7 @@ class Robot:
         self.hub.speaker.volume(50)
         # Definitely not bolero trust
         self.hub.speaker.play_notes([
-            "C5/4.", "B4/16_", "C5/16", "D5/16_", "C5/16", "B4/16_", "A4/16", "C5/16", "R/16", "C5/16_", "A4/16", "C5/4"
+            "C3/4.", "B2/16_", "C3/16", "D3/16_", "C3/16", "B2/16_", "A2/16", "C3/16", "R/16", "C3/16_", "A2/16", "C3/4"
         ])
 
     def battery_display(self):
