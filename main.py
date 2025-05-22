@@ -145,15 +145,33 @@ class Robot:
         self.drivebase.curve(75, degrees, Stop.COAST, True)
     
     def grey(self):
-        self.drivebase.straight(100) # go to middle of green area
+        self.drivebase.reset()
+        initial_facing = self.drivebase.angle()
+        distance_to_middle = 100
+        self.drivebase.straight(distance_to_middle) # go to middle of green area
         while self.ultrasonic_sensor.distance() == 2000: # wait for the ultrasonic sensor to detect something
             self.short_turn_in_degrees(5)
         self.start_motors(ROBOT_FORWARD_SPEED, ROBOT_FORWARD_SPEED) # drive forward
+        ticks_driven = 0
         while not self.ultrasonic_sensor.distance() < 80:
-            pass
+            ticks_driven += 1
         self.stop_motors() # stop
-        self.arm_motor.run_until_stalled(100) # move the arm
-
+        self.arm_motor.run_until_stalled(100) # move the arm down
+        self.start_motors(-ROBOT_FORWARD_SPEED, -ROBOT_FORWARD_SPEED) # drive backwards
+        while ticks_driven > 0: # go back to the middle of the green area
+            ticks_driven -= 1
+        self.stop_motors() # stop
+        self.drivebase.turn(initial_facing - self.drivebase.angle()) # turn back to the initial facing
+        self.drivebase.straight(-distance_to_middle)
+        # place can outside green area
+        self.drivebase.turn(135)
+        self.drivebase.straight(100)
+        self.arm_motor.run_until_stalled(-100) # move the arm up
+        # reset to line
+        self.drivebase.straight(-100)
+        self.drivebase.turn(45)
+        # continue on the path
+        self.robot_state = "straight" # set the robot state to straight
 
     def update(self):
         self.get_colors()
