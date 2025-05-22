@@ -175,11 +175,9 @@ class Robot:
         
         # green
         elif self.robot_state == "green left":
-            print("REE GREEN", end="")
             self.stop_motors()
             self.turn_green("left")
         elif self.robot_state == "green right":
-            print("REE GREEN", end="")
             self.stop_motors()
             self.turn_green("right")
 
@@ -188,14 +186,13 @@ class Robot:
             self.stop_motors()
         
     def debug(self):       
-        print("i am special", end=", ")     
-        print(self.ultrasonic, end=", ")
+        print()
     
     def run(self):
         while True:
             self.update()
             self.move()
-            self.debug()
+            # self.debug()
 
 def main():
     robot = Robot()
