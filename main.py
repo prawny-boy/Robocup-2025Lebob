@@ -10,6 +10,7 @@ ROBOT_ACCELERATION = 750
 ROBOT_TURN_RATE = 750
 ROBOT_TURN_ACCELERATION = 3000
 ROBOT_MOVE_SPEED = 400
+ROBOT_TURNING_DEGREES = 10
 
 ports = {
     "left_drive": Port.E,
@@ -102,31 +103,43 @@ class Robot:
         self.right_color = self.information_to_color(self.right_color_sensor_information)
 
     def update(self):
+        # forward
         if self.left_color == Color.WHITE and self.right_color == Color.WHITE:
             self.current_direction = "straight"
-        elif self.left_color == Color.BLACK:
-            self.current_direction = "left"
-        elif self.right_color == Color.BLACK:
-            self.current_direction = "right"
+
+        # black line following
+        elif self.left_color == Color.BLACK and self.current_direction != "left":
+            self.current_direction = "new left" # new will mean that it will stop then turn
+        elif self.right_color == Color.BLACK and self.current_direction != "right":
+            self.current_direction = "new right"
 
     def move(self):
         if self.current_direction == "straight":
             self.start_motors(ROBOT_MOVE_SPEED, ROBOT_MOVE_SPEED)
-        elif self.current_direction == "left":
+
+        elif self.current_direction == "new left": # this will stop, then set it to left
             self.stop_motors()
-            self.turn_in_degrees(-10)
-        elif self.current_direction == "right":
+            self.turn_in_degrees(-ROBOT_TURNING_DEGREES)
+            self.current_direction = "left"
+        elif self.current_direction == "left": # left, no stopping
+            self.turn_in_degrees(-ROBOT_TURNING_DEGREES)
+
+        elif self.current_direction == "new right": # this will stop, then set it to right
             self.stop_motors()
-            self.turn_in_degrees(10)
+            self.turn_in_degrees(ROBOT_TURNING_DEGREES)
+            self.current_direction = "right"
+        elif self.current_direction == "right": # right, no stopping
+            self.turn_in_degrees(ROBOT_TURNING_DEGREES)
+        
     def debug(self):            
-        return
+        print(self.current_direction)
     
     def run(self):
         while True:
             self.get_colors()
             self.update()
             self.move()
-            # self.debug()
+            self.debug()
 
 def main():
     robot = Robot()
