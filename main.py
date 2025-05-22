@@ -9,8 +9,10 @@ ROBOT_SPEED = 500
 ROBOT_ACCELERATION = 750
 ROBOT_TURN_RATE = 750
 ROBOT_TURN_ACCELERATION = 3000
-ROBOT_MOVE_SPEED = 350
-ROBOT_TURNING_DEGREES = 6
+
+# Robot Behavior
+ROBOT_FORWARD_SPEED = 350
+ROBOT_TURNING_INCREMENT = 6
 
 ports = {
     "left_drive": Port.E,
@@ -43,7 +45,7 @@ class Robot:
 
         self.robot_state = "obstacle"
     
-    def turn_in_degrees(self, degrees=ROBOT_TURNING_DEGREES):
+    def turn_in_degrees(self, degrees=ROBOT_TURNING_INCREMENT):
         """Turns in degrees."""
         self.drivebase.curve(25, degrees, Stop.COAST, False)
     
@@ -147,8 +149,8 @@ class Robot:
         if self.robot_state == "obstacle":
             self.stop_motors()
             self.short_turn_in_degrees(90)
-            self.drivebase.curve(200, -140, Stop.BRAKE, True)
-            self.start_motors(ROBOT_MOVE_SPEED, ROBOT_MOVE_SPEED)
+            self.drivebase.curve(180, -150, Stop.BRAKE, True)
+            self.start_motors(ROBOT_FORWARD_SPEED, ROBOT_FORWARD_SPEED)
             self.get_colors()
             while self.right_color == Color.WHITE:
                 self.get_colors()
@@ -157,21 +159,21 @@ class Robot:
 
         # straight
         if self.robot_state == "straight":
-            self.start_motors(ROBOT_MOVE_SPEED, ROBOT_MOVE_SPEED)
+            self.start_motors(ROBOT_FORWARD_SPEED, ROBOT_FORWARD_SPEED)
 
         elif self.robot_state == "new left": # this will stop, then set it to left
             self.stop_motors()
-            self.turn_in_degrees(-ROBOT_TURNING_DEGREES)
+            self.turn_in_degrees(-ROBOT_TURNING_INCREMENT)
             self.robot_state = "left"
         elif self.robot_state == "left": # left, no stopping
-            self.turn_in_degrees(-ROBOT_TURNING_DEGREES)
+            self.turn_in_degrees(-ROBOT_TURNING_INCREMENT)
 
         elif self.robot_state == "new right": # this will stop, then set it to right
             self.stop_motors()
-            self.turn_in_degrees(ROBOT_TURNING_DEGREES)
+            self.turn_in_degrees(ROBOT_TURNING_INCREMENT)
             self.robot_state = "right"
         elif self.robot_state == "right": # right, no stopping
-            self.turn_in_degrees(ROBOT_TURNING_DEGREES)
+            self.turn_in_degrees(ROBOT_TURNING_INCREMENT)
         
         # green
         elif self.robot_state == "green left":
@@ -185,8 +187,8 @@ class Robot:
         elif self.robot_state == "stop":
             self.stop_motors()
         
-    def debug(self):       
-        print(self.left_color_sensor_information, self.left_color)
+    def debug(self):
+        print(f"LC: {self.left_color} RC: {self.right_color} U: {self.ultrasonic} S: {self.robot_state}{" "*30}")
     
     def run(self):
         while True:
