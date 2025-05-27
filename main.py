@@ -10,8 +10,12 @@ ROBOT_SPEED = 500
 ROBOT_ACCELERATION = 750
 ROBOT_TURN_RATE = 750
 ROBOT_TURN_ACCELERATION = 3000
-ROBOT_MOVE_SPEED = 350
-ROBOT_TURNING_DEGREES = 6
+LOW_VOLTAGE = 7000
+HIGH_VOLTAGE = 8300
+
+# Robot Behavior
+ROBOT_FORWARD_SPEED = 350
+ROBOT_TURNING_INCREMENT = 6
 
 ports = {
     "left_drive": Port.E,
@@ -45,7 +49,38 @@ class Robot:
 
         self.robot_state = "obstacle"
 
-    def turn_in_degrees(self, degrees=ROBOT_TURNING_DEGREES):
+
+    def intro_sound(self):
+        # play intro sound
+        self.hub.speaker.volume(50)
+        # Definitely not bolero trust
+        self.hub.speaker.play_notes([
+            "C3/4.", "B2/16_", "C3/16", "D3/16_", "C3/16", "B2/16_", "A2/16", "C3/16", "R/16", "C3/16_", "A2/16", "C3/4"
+        ])
+
+    def battery_display(self):
+        # display battery of hub
+        v = self.hub.battery.voltage()
+        vPct = rescale(v, LOW_VOLTAGE, HIGH_VOLTAGE, 1, 100)
+        print(f"Battery %: {round(vPct, 1)}, Voltage: {v}")
+        if vPct < 70:
+            if vPct < 40:
+                pri+nt("EMERGENCY: BATTERY LOW!")
+                battery_status_light = Color.RED
+            else:
+                print("Battery is below 70% Please charge!")
+                battery_status_light = Color.YELLOW
+            self.status_light(battery_status_light)
+        else:
+            self.status_light(Color.GREEN)
+
+    def status_light(self, color):
+        self.hub.light.off()
+        self.hub.light.on(color)
+
+    def turn_in_degrees(self, degrees=ROBOT_TURNING_INCREMENT):
+        """Turns in degrees."""
+
         self.drivebase.curve(25, degrees, Stop.COAST, False)
 
     def short_turn_in_degrees(self, degrees):
@@ -102,13 +137,41 @@ class Robot:
         self.left_color = self.information_to_color(self.left_color_sensor_information)
         self.right_color = self.information_to_color(self.right_color_sensor_information)
 
-    def turn_green(self, direction):
+    def green(self, direction):
         if direction == "left":
             degrees = -75
         else:
             degrees = 75
-
         self.drivebase.curve(75, degrees, Stop.COAST, True)
+    
+    def grey(self):
+        self.drivebase.reset()
+        initial_facing = self.drivebase.angle()
+        distance_to_middle = 100
+        self.drivebase.straight(distance_to_middle) # go to middle of green area
+        while self.ultrasonic_sensor.distance() == 2000: # wait for the ultrasonic sensor to detect something
+            self.short_turn_in_degrees(5)
+        self.start_motors(ROBOT_FORWARD_SPEED, ROBOT_FORWARD_SPEED) # drive forward
+        ticks_driven = 0
+        while not self.ultrasonic_sensor.distance() < 80:
+            ticks_driven += 1
+        self.stop_motors() # stop
+        self.arm_motor.run_until_stalled(100) # move the arm down
+        self.start_motors(-ROBOT_FORWARD_SPEED, -ROBOT_FORWARD_SPEED) # drive backwards
+        while ticks_driven > 0: # go back to the middle of the green area
+            ticks_driven -= 1
+        self.stop_motors() # stop
+        self.drivebase.turn(initial_facing - self.drivebase.angle()) # turn back to the initial facing
+        self.drivebase.straight(-distance_to_middle)
+        # place can outside green area
+        self.drivebase.turn(135)
+        self.drivebase.straight(100)
+        self.arm_motor.run_until_stalled(-100) # move the arm up
+        # reset to line
+        self.drivebase.straight(-100)
+        self.drivebase.turn(45)
+        # continue on the path
+        self.robot_state = "straight" # set the robot state to straight
 
     def update(self):
         self.get_colors()
@@ -135,8 +198,8 @@ class Robot:
         if self.robot_state == "obstacle":
             self.stop_motors()
             self.short_turn_in_degrees(90)
-            self.drivebase.curve(200, -140, Stop.BRAKE, True)
-            self.start_motors(ROBOT_MOVE_SPEED, ROBOT_MOVE_SPEED)
+            self.drivebase.curve(180, -150, Stop.BRAKE, True)
+            self.start_motors(ROBOT_FORWARD_SPEED, ROBOT_FORWARD_SPEED)
             self.get_colors()
             while self.right_color == Color.WHITE:
                 self.get_colors()
@@ -144,31 +207,42 @@ class Robot:
             self.robot_state = "straight"
 
         if self.robot_state == "straight":
-            self.start_motors(ROBOT_MOVE_SPEED, ROBOT_MOVE_SPEED)
-        elif self.robot_state == "new left":
+
+            self.start_motors(ROBOT_FORWARD_SPEED, ROBOT_FORWARD_SPEED)
+
+        elif self.robot_state == "new left": # this will stop, then set it to left
             self.stop_motors()
-            self.turn_in_degrees(-ROBOT_TURNING_DEGREES)
+            self.turn_in_degrees(-ROBOT_TURNING_INCREMENT)
             self.robot_state = "left"
-        elif self.robot_state == "left":
-            self.turn_in_degrees(-ROBOT_TURNING_DEGREES)
-        elif self.robot_state == "new right":
+
+        elif self.robot_state == "left": # left, no stopping
+            self.turn_in_degrees(-ROBOT_TURNING_INCREMENT)
+
+        elif self.robot_state == "new right": # this will stop, then set it to right
+
             self.stop_motors()
-            self.turn_in_degrees(ROBOT_TURNING_DEGREES)
+            self.turn_in_degrees(ROBOT_TURNING_INCREMENT)
             self.robot_state = "right"
-        elif self.robot_state == "right":
-            self.turn_in_degrees(ROBOT_TURNING_DEGREES)
+
+        elif self.robot_state == "right": # right, no stopping
+            self.turn_in_degrees(ROBOT_TURNING_INCREMENT)
+        
+        # green
         elif self.robot_state == "green left":
             self.stop_motors()
-            self.turn_green("left")
+            self.green("left")
         elif self.robot_state == "green right":
             self.stop_motors()
-            self.turn_green("right")
+
+            self.green("right")
+
+        # stop
         elif self.robot_state == "stop":
             self.stop_motors()
-
+        
     def debug(self):
-        print(self.left_color_sensor_information, self.left_color)
-
+        print(f"LC: {self.left_color} RC: {self.right_color} U: {self.ultrasonic} S: {self.robot_state}{" "*30}")
+        
     def run(self):
         while True:
             self.update()
@@ -176,8 +250,23 @@ class Robot:
             self.debug()
 
 
+def rescale(value, in_min, in_max, out_min, out_max):
+    neg = value / abs(value) # will either be 1 or -1
+    value = abs(value)
+    if value < in_min: value = in_min
+    if value > in_max: value = in_max
+    retvalue = (value - in_min) * (out_max / (in_max - in_min))
+    if retvalue > out_max: retvalue = out_max
+    if retvalue < out_min: retvalue = out_min
+    return retvalue * neg
+
+
 def main():
     robot = Robot()
+    robot.battery_display()
+    robot.arm_motor.run_until_stalled(500, duty_limit=30) # move the arm
+    print("Calibrating...")
+    robot.intro_sound()
     robot.run()
 
 
