@@ -49,13 +49,43 @@ class Robot:
 
         self.robot_state = "obstacle"
 
-    def intro_sound(self):
-        # play intro sound
-        self.hub.speaker.volume(50)
-        # Definitely not bolero trust
-        self.hub.speaker.play_notes([
-            "C3/4.", "B2/16_", "C3/16", "D3/16_", "C3/16", "B2/16_", "A2/16", "C3/16", "R/16", "C3/16_", "A2/16", "C3/4"
-        ])
+    def play_bolero_full(self):
+        # set volume
+        self.hub.speaker.volume(70)
+
+        # intro
+        intro = [
+            "C3/4.", "B2/16_", "C3/16", "D3/16_", "C3/16", "B2/16_",
+            "A2/16", "C3/16", "R/16", "C3/16_", "A2/16", "C3/4"
+        ]
+
+        # main rhythm and motif
+        pattern = ["C3/8", "R/8", "C3/8", "R/8", "C3/8", "R/8", "C3/8", "R/8"]
+        motif = ["E4/8_", "D4/8_", "C4/8_", "D4/8_", "E4/8_", "D4/8_", "C4/8_", "B3/8_"]
+
+        # first variation
+        variation1 = [
+            "G4/4_", "G4/4.", "A4/8_", "G4/8_",
+            "F4/4_", "E4/4."
+        ]
+
+        # second variation
+        variation2 = [
+            "G4/2_", "A4/2_", "B4/2_", "C5/2_",
+            "B4/2_", "A4/2_"
+        ]
+
+        # finale
+        finale = [
+            "C5/1_", "R/8", "C5/8_", "B4/8_",
+            "A4/8_", "G4/4_", "C4/2_"
+        ]
+
+        # assemble all bars in one sequence
+        notes = intro + (pattern + motif) * 18 + variation1 + variation2 + finale
+
+        # play the full Boléro
+        self.hub.speaker.play_notes(notes)
 
     def battery_display(self):
         # display battery of hub
