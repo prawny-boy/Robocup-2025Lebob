@@ -3,7 +3,7 @@ from pybricks.hubs import PrimeHub
 from pybricks.robotics import DriveBase
 from pybricks.parameters import Port, Color, Axis, Direction, Stop
 
-
+# constants
 DRIVEBASE_WHEEL_DIAMETER = 56
 DRIVEBASE_AXLE_TRACK = 112
 ROBOT_SPEED = 500
@@ -13,10 +13,14 @@ ROBOT_TURN_ACCELERATION = 3000
 LOW_VOLTAGE = 7000
 HIGH_VOLTAGE = 8300
 
-# Robot Behavior
-ROBOT_FORWARD_SPEED = 350
-ROBOT_TURNING_INCREMENT = 6
+# line following tuning
+ROBOT_FORWARD_SPEED = 350            # deg/s motor speed
+PI = 3.14159
+LINE_SPEED = ROBOT_FORWARD_SPEED * PI * DRIVEBASE_WHEEL_DIAMETER / 360  # mm/s
+KP = 1.5            # proportional gain
+MAX_TURN_RATE = 200 # deg/s
 
+# ports
 ports = {
     "left_drive": Port.E,
     "right_drive": Port.C,
@@ -26,19 +30,21 @@ ports = {
     "arm_motor": Port.F,
 }
 
-
 class Robot:
     def __init__(self):
         self.hub = PrimeHub(Axis.Z, Axis.X)
         self.left_drive = Motor(ports["left_drive"], positive_direction=Direction.COUNTERCLOCKWISE)
         self.right_drive = Motor(ports["right_drive"])
-
         self.color_sensor_left = ColorSensor(ports["color_sensor_left"])
         self.color_sensor_right = ColorSensor(ports["color_sensor_right"])
         self.ultrasonic_sensor = UltrasonicSensor(ports["ultrasonic_sensor"])
         self.arm_motor = Motor(ports["arm_motor"])
-
-        self.drivebase = DriveBase(self.left_drive, self.right_drive, DRIVEBASE_WHEEL_DIAMETER, DRIVEBASE_AXLE_TRACK)
+        self.drivebase = DriveBase(
+            self.left_drive,
+            self.right_drive,
+            DRIVEBASE_WHEEL_DIAMETER,
+            DRIVEBASE_AXLE_TRACK
+        )
         self.drivebase.use_gyro(False)
         self.drivebase.settings(
             ROBOT_SPEED,
@@ -46,60 +52,31 @@ class Robot:
             ROBOT_TURN_RATE,
             ROBOT_TURN_ACCELERATION
         )
-
         self.robot_state = "obstacle"
 
-    def play_bolero_full(self):
-        # set volume
+    def intro_sound(self):
         self.hub.speaker.volume(70)
-
-        # intro
-        intro = [
-            "C3/4.", "B2/16_", "C3/16", "D3/16_", "C3/16", "B2/16_",
-            "A2/16", "C3/16", "R/16", "C3/16_", "A2/16", "C3/4"
-        ]
-
-        # main rhythm and motif
-        pattern = ["C3/8", "R/8", "C3/8", "R/8", "C3/8", "R/8", "C3/8", "R/8"]
+        intro = ["C3/4.", "B2/16_", "C3/16", "D3/16_", "C3/16", "B2/16_",
+                 "A2/16", "C3/16", "R/16", "C3/16_", "A2/16", "C3/4"]
+        pattern = ["C3/8", "R/8"] * 4
         motif = ["E4/8_", "D4/8_", "C4/8_", "D4/8_", "E4/8_", "D4/8_", "C4/8_", "B3/8_"]
-
-        # first variation
-        variation1 = [
-            "G4/4_", "G4/4.", "A4/8_", "G4/8_",
-            "F4/4_", "E4/4."
-        ]
-
-        # second variation
-        variation2 = [
-            "G4/2_", "A4/2_", "B4/2_", "C5/2_",
-            "B4/2_", "A4/2_"
-        ]
-
-        # finale
-        finale = [
-            "C5/1_", "R/8", "C5/8_", "B4/8_",
-            "A4/8_", "G4/4_", "C4/2_"
-        ]
-
-        # assemble all bars in one sequence
+        variation1 = ["G4/4_", "G4/4.", "A4/8_", "G4/8_", "F4/4_", "E4/4."]
+        variation2 = ["G4/2_", "A4/2_", "B4/2_", "C5/2_", "B4/2_", "A4/2_"]
+        finale = ["C5/1_", "R/8", "C5/8_", "B4/8_", "A4/8_", "G4/4_", "C4/2_"]
         notes = intro + (pattern + motif) * 18 + variation1 + variation2 + finale
-
-        # play the full Boléro
         self.hub.speaker.play_notes(notes)
 
     def battery_display(self):
-        # display battery of hub
         v = self.hub.battery.voltage()
         vPct = rescale(v, LOW_VOLTAGE, HIGH_VOLTAGE, 1, 100)
-        print(f"Battery %: {round(vPct, 1)}, Voltage: {v}")
+        print(f"Battery %: {round(vPct,1)}, Voltage: {v}")
         if vPct < 70:
             if vPct < 40:
                 print("EMERGENCY: BATTERY LOW!")
-                battery_status_light = Color.RED
+                self.status_light(Color.RED)
             else:
-                print("Battery is below 70% Please charge!")
-                battery_status_light = Color.YELLOW
-            self.status_light(battery_status_light)
+                print("Battery below 70% - please charge")
+                self.status_light(Color.YELLOW)
         else:
             self.status_light(Color.GREEN)
 
@@ -107,121 +84,87 @@ class Robot:
         self.hub.light.off()
         self.hub.light.on(color)
 
-    def turn_in_degrees(self, degrees=ROBOT_TURNING_INCREMENT):
-        """Turns in degrees."""
-
+    def turn_in_degrees(self, degrees=6):
         self.drivebase.curve(25, degrees, Stop.COAST, False)
 
     def short_turn_in_degrees(self, degrees):
         self.drivebase.turn(degrees)
 
     def move_forward(self, distance, speed=None):
-        if speed is not None:
-            self.set_speed(speed)
+        if speed:
+            self.drivebase.settings(
+                speed, ROBOT_ACCELERATION, ROBOT_TURN_RATE, ROBOT_TURN_ACCELERATION)
         self.drivebase.straight(distance)
 
-    def start_motors(self, left_speed, right_speed):
-        if not self.left_drive.speed() == left_speed:
-            self.left_drive.run(left_speed)
-        if not self.right_drive.speed() == right_speed:
-            self.right_drive.run(right_speed)
+    def start_motors(self, ls, rs):
+        if self.left_drive.speed() != ls:
+            self.left_drive.run(ls)
+        if self.right_drive.speed() != rs:
+            self.right_drive.run(rs)
 
     def stop_motors(self):
         self.left_drive.stop()
         self.right_drive.stop()
 
-    def set_speed(self, speed):
-        if speed == 0:
-            speed = ROBOT_SPEED
-        self.drivebase.settings(speed, ROBOT_ACCELERATION, ROBOT_TURN_RATE, ROBOT_TURN_ACCELERATION)
-
-    def information_to_color(self, information):
-        if information["color"] == Color.WHITE:
+    def information_to_color(self, info):
+        if info["color"] == Color.WHITE:
             return Color.WHITE
-        elif information["color"] == Color.GREEN and information["hsv"].h > 135 and information["hsv"].h < 165:
+        if info["color"] == Color.GREEN and 135 < info["hsv"].h < 165:
             return Color.GREEN
-        elif information["color"] == Color.BLUE and information["hsv"].s > 80 and information["hsv"].v > 80:
+        if info["color"] == Color.BLUE and info["hsv"].s > 80 and info["hsv"].v > 80:
             return Color.BLUE
-        elif information["color"] == Color.RED and information["hsv"].s > 85:
+        if info["color"] == Color.RED and info["hsv"].s > 85:
             return Color.RED
-        elif information["color"] == Color.RED:
+        if info["color"] == Color.RED:
             return Color.ORANGE
-        elif information["hsv"].s < 20 and information["reflection"] < 30 and information["reflection"] > 3:
+        if info["hsv"].s < 20 and 3 < info["reflection"] < 30:
             return Color.BLACK
-        else:
-            return Color.NONE
+        return Color.NONE
 
     def get_colors(self):
-        self.left_color_sensor_information = {
-            "reflection": self.color_sensor_left.reflection(),
-            "color": self.color_sensor_left.color(),
-            "hsv": self.color_sensor_left.hsv(),
-        }
-        self.right_color_sensor_information = {
-            "reflection": self.color_sensor_right.reflection(),
-            "color": self.color_sensor_right.color(),
-            "hsv": self.color_sensor_right.hsv(),
-        }
+        l = {"reflection": self.color_sensor_left.reflection(),
+             "color": self.color_sensor_left.color(),
+             "hsv": self.color_sensor_left.hsv()}
+        r = {"reflection": self.color_sensor_right.reflection(),
+             "color": self.color_sensor_right.color(),
+             "hsv": self.color_sensor_right.hsv()}
+        self.left_color = self.information_to_color(l)
+        self.right_color = self.information_to_color(r)
 
-        self.left_color = self.information_to_color(self.left_color_sensor_information)
-        self.right_color = self.information_to_color(self.right_color_sensor_information)
+    def green(self, dir):
+        d = -75 if dir == "left" else 75
+        self.drivebase.curve(75, d, Stop.COAST, True)
 
-    def green(self, direction):
-        if direction == "left":
-            degrees = -75
-        else:
-            degrees = 75
-        self.drivebase.curve(75, degrees, Stop.COAST, True)
-
-    def grey(self):
-        self.drivebase.reset()
-        initial_facing = self.drivebase.angle()
-        distance_to_middle = 100
-        self.drivebase.straight(distance_to_middle)  # go to middle of green area
-        while self.ultrasonic_sensor.distance() == 2000:  # wait for the ultrasonic sensor to detect something
-            self.short_turn_in_degrees(5)
-        self.start_motors(ROBOT_FORWARD_SPEED, ROBOT_FORWARD_SPEED)  # drive forward
-        ticks_driven = 0
-        while not self.ultrasonic_sensor.distance() < 80:
-            ticks_driven += 1
-        self.stop_motors()  # stop
-        self.arm_motor.run_until_stalled(100)  # move the arm down
-        self.start_motors(-ROBOT_FORWARD_SPEED, -ROBOT_FORWARD_SPEED)  # drive backwards
-        while ticks_driven > 0:  # go back to the middle of the green area
-            ticks_driven -= 1
-        self.stop_motors()  # stop
-        self.drivebase.turn(initial_facing - self.drivebase.angle())  # turn back to the initial facing
-        self.drivebase.straight(-distance_to_middle)
-        # place can outside green area
-        self.drivebase.turn(135)
-        self.drivebase.straight(100)
-        self.arm_motor.run_until_stalled(-100)  # move the arm up
-        # reset to line
-        self.drivebase.straight(-100)
-        self.drivebase.turn(45)
-        # continue on the path
-        self.robot_state = "straight"  # set the robot state to straight
+    def follow_line(self):
+        l = self.color_sensor_left.reflection()
+        r = self.color_sensor_right.reflection()
+        err = l - r
+        rate = max(min(KP * err, MAX_TURN_RATE), -MAX_TURN_RATE)
+        self.drivebase.drive(LINE_SPEED, rate)
 
     def update(self):
         self.get_colors()
         self.ultrasonic = self.ultrasonic_sensor.distance()
-
         if self.ultrasonic < 80:
             self.robot_state = "obstacle"
             return
-
-        if self.left_color == Color.WHITE and self.right_color == Color.WHITE:
-            self.robot_state = "straight"
-        elif self.left_color == Color.BLACK and self.robot_state != "left":
-            self.robot_state = "new left"
-        elif self.right_color == Color.BLACK and self.robot_state != "right":
-            self.robot_state = "new right"
-        elif self.left_color == Color.GREEN:
+        if self.left_color == Color.GREEN:
             self.robot_state = "green left"
-        elif self.right_color == Color.GREEN:
+            return
+        if self.right_color == Color.GREEN:
             self.robot_state = "green right"
+            return
+        on_l = self.left_color == Color.WHITE
+        on_r = self.right_color == Color.WHITE
+        prev = self.robot_state
+        if on_l and on_r:
+            self.robot_state = "straight"
+        elif on_l:
+            self.robot_state = "new right"
+        elif on_r:
+            self.robot_state = "new left"
         else:
-            self.robot_state = "stop"
+            self.robot_state = prev
 
     def move(self):
         if self.robot_state == "obstacle":
@@ -234,43 +177,14 @@ class Robot:
                 self.get_colors()
             self.turn_in_degrees(45)
             self.robot_state = "straight"
-
-        if self.robot_state == "straight":
-
-            self.start_motors(ROBOT_FORWARD_SPEED, ROBOT_FORWARD_SPEED)
-
-        elif self.robot_state == "new left":  # this will stop, then set it to left
+        elif self.robot_state in ("green left", "green right"):
             self.stop_motors()
-            self.turn_in_degrees(-ROBOT_TURNING_INCREMENT)
-            self.robot_state = "left"
-
-        elif self.robot_state == "left":  # left, no stopping
-            self.turn_in_degrees(-ROBOT_TURNING_INCREMENT)
-
-        elif self.robot_state == "new right":  # this will stop, then set it to right
-
-            self.stop_motors()
-            self.turn_in_degrees(ROBOT_TURNING_INCREMENT)
-            self.robot_state = "right"
-
-        elif self.robot_state == "right":  # right, no stopping
-            self.turn_in_degrees(ROBOT_TURNING_INCREMENT)
-
-        # green
-        elif self.robot_state == "green left":
-            self.stop_motors()
-            self.green("left")
-        elif self.robot_state == "green right":
-            self.stop_motors()
-
-            self.green("right")
-
-        # stop
-        elif self.robot_state == "stop":
-            self.stop_motors()
+            self.green(self.robot_state.split()[1])
+        else:
+            self.follow_line()
 
     def debug(self):
-        print(f"LC: {self.left_color} RC: {self.right_color} U: {self.ultrasonic} S: {self.robot_state}{" "*30}")
+        print(f"LC:{self.left_color} RC:{self.right_color} U:{self.ultrasonic} S:{self.robot_state}")
 
     def run(self):
         while True:
@@ -279,28 +193,20 @@ class Robot:
             self.debug()
 
 
-def rescale(value, in_min, in_max, out_min, out_max):
-    neg = value / abs(value)  # will either be 1 or -1
-    value = abs(value)
-    if value < in_min:
-        value = in_min
-    if value > in_max:
-        value = in_max
-    retvalue = (value - in_min) * (out_max / (in_max - in_min))
-    if retvalue > out_max:
-        retvalue = out_max
-    if retvalue < out_min:
-        retvalue = out_min
-    return retvalue * neg
+def rescale(v, imin, imax, omin, omax):
+    sign = v/abs(v)
+    v = abs(v)
+    v = max(min(v, imax), imin)
+    val = (v-imin)*(omax/(imax-imin))
+    val = max(min(val, omax), omin)
+    return val*sign
 
 
 def main():
     robot = Robot()
     robot.battery_display()
-    robot.arm_motor.run_until_stalled(500, duty_limit=30)  # move the arm
+    robot.arm_motor.run_until_stalled(500, duty_limit=30)
     print("Calibrating...")
-    robot.intro_sound()
     robot.run()
-
 
 main()
