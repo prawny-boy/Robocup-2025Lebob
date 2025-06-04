@@ -14,11 +14,12 @@ LOW_VOLTAGE = 7000
 HIGH_VOLTAGE = 8300
 
 # line following tuning
-ROBOT_FORWARD_SPEED = 350            # deg/s motor speed
-PI = 3.14159
+ROBOT_FORWARD_SPEED = 200            # deg/s motor speedi in degrees per second
+PI = 3.14159265358979323846264338327950288419716939937510
 LINE_SPEED = ROBOT_FORWARD_SPEED * PI * DRIVEBASE_WHEEL_DIAMETER / 360  # mm/s
-KP = 1.5            # proportional gain
-MAX_TURN_RATE = 200 # deg/s
+KP = 3         # proportional gain
+MAX_TURN_RATE = 500  # deg/s
+GREEN_TURN_DEGREES = 60  # degrees to turn when green detected
 
 # ports
 ports = {
@@ -45,7 +46,7 @@ class Robot:
             DRIVEBASE_WHEEL_DIAMETER,
             DRIVEBASE_AXLE_TRACK
         )
-        self.drivebase.use_gyro(False)
+        self.drivebase.use_gyro(True)
         self.drivebase.settings(
             ROBOT_SPEED,
             ROBOT_ACCELERATION,
@@ -55,7 +56,7 @@ class Robot:
         self.robot_state = "obstacle"
 
     def intro_sound(self):
-        self.hub.speaker.volume(70)
+        self.hub.speaker.volume(100)
         intro = ["C3/4.", "B2/16_", "C3/16", "D3/16_", "C3/16", "B2/16_",
                  "A2/16", "C3/16", "R/16", "C3/16_", "A2/16", "C3/4"]
         pattern = ["C3/8", "R/8"] * 4
@@ -84,7 +85,7 @@ class Robot:
         self.hub.light.off()
         self.hub.light.on(color)
 
-    def turn_in_degrees(self, degrees=6):
+    def turn_in_degrees(self, degrees):
         self.drivebase.curve(25, degrees, Stop.COAST, False)
 
     def short_turn_in_degrees(self, degrees):
@@ -132,8 +133,8 @@ class Robot:
         self.right_color = self.information_to_color(r)
 
     def green(self, dir):
-        d = -75 if dir == "left" else 75
-        self.drivebase.curve(75, d, Stop.COAST, True)
+        d = -GREEN_TURN_DEGREES if dir == "left" else GREEN_TURN_DEGREES
+        self.drivebase.curve(GREEN_TURN_DEGREES, d, Stop.COAST, True)
 
     def follow_line(self):
         l = self.color_sensor_left.reflection()
@@ -141,6 +142,26 @@ class Robot:
         err = l - r
         rate = max(min(KP * err, MAX_TURN_RATE), -MAX_TURN_RATE)
         self.drivebase.drive(LINE_SPEED, rate)
+         
+      #  self.get_colors()
+      #  if self.left_color == Color.WHITE and self.right_color == Color.WHITE:
+      #      self.start_motors(MAX_TURN_RATE, MAX_TURN_RATE)
+      #  elif self.left_color == Color.WHITE:
+      #      self.start_motors(MAX_TURN_RATE,  0)
+      #  elif self.right_color == Color.WHITE:
+      #      self.start_motors(0, MAX_TURN_RATE)
+
+    def avoid_obstacle(self):
+        self.stop_motors()
+        self.short_turn_in_degrees(90)
+        self.drivebase.curve(180, -150, Stop.BRAKE, True)
+        self.start_motors(ROBOT_FORWARD_SPEED, ROBOT_FORWARD_SPEED)
+        self.get_colors()
+        while self.right_color == Color.WHITE:
+            self.get_colors()
+        self.turn_in_degrees(1)
+        self.robot_state = "straight"
+        self.arm_motor.run_angle(-500, 0, Stop.HOLD, wait=True)
 
     def update(self):
         self.get_colors()
@@ -168,18 +189,12 @@ class Robot:
 
     def move(self):
         if self.robot_state == "obstacle":
-            self.stop_motors()
-            self.short_turn_in_degrees(90)
-            self.drivebase.curve(180, -150, Stop.BRAKE, True)
-            self.start_motors(ROBOT_FORWARD_SPEED, ROBOT_FORWARD_SPEED)
-            self.get_colors()
-            while self.right_color == Color.WHITE:
-                self.get_colors()
-            self.turn_in_degrees(45)
-            self.robot_state = "straight"
+            self.avoid_obstacle()
+
         elif self.robot_state in ("green left", "green right"):
             self.stop_motors()
             self.green(self.robot_state.split()[1])
+
         else:
             self.follow_line()
 
@@ -208,5 +223,6 @@ def main():
     robot.arm_motor.run_until_stalled(500, duty_limit=30)
     print("Calibrating...")
     robot.run()
+
 
 main()
