@@ -133,6 +133,18 @@ class Robot:
         
         self.drivebase.curve(CONSTANTS["CURVE_RADIUS_GREEN"], degrees, Stop.COAST, True)
 
+    def avoid_obstacle(self):
+        self.stop_motors()
+        self.sharp_turn_in_degrees(CONSTANTS["OBSTACLE_INITIAL_TURN_DEGREES"])
+        self.drivebase.curve(CONSTANTS["CURVE_RADIUS_OBSTACLE"], -CONSTANTS["OBSTACLE_TURN_DEGREES"], Stop.BRAKE, True)
+        self.start_motors(CONSTANTS["ROBOT_MOVE_SPEED"], CONSTANTS["ROBOT_MOVE_SPEED"])
+
+        self.get_colors() # Re-read colors after turning
+        while self.right_color == Color.WHITE: # Keep turning until right sensor sees something other than white
+            self.get_colors()
+        self.turn_in_degrees(CONSTANTS["OBSTACLE_FINAL_TURN_DEGREES"])
+        self.robot_state = "straight" # Reset state after handling obstacle
+    
     def update(self):
         """Update the state of the robot."""
         self.get_colors()
@@ -168,16 +180,7 @@ class Robot:
         """Move the robot based on its current state."""
         # Obstacle
         if self.robot_state == "obstacle":
-            self.stop_motors()
-            self.sharp_turn_in_degrees(CONSTANTS["OBSTACLE_INITIAL_TURN_DEGREES"])
-            self.drivebase.curve(CONSTANTS["CURVE_RADIUS_OBSTACLE"], -CONSTANTS["OBSTACLE_TURN_DEGREES"], Stop.BRAKE, True)
-            self.start_motors(CONSTANTS["ROBOT_MOVE_SPEED"], CONSTANTS["ROBOT_MOVE_SPEED"])
-
-            self.get_colors() # Re-read colors after turning
-            while self.right_color == Color.WHITE: # Keep turning until right sensor sees something other than white
-                self.get_colors()
-            self.turn_in_degrees(CONSTANTS["OBSTACLE_FINAL_TURN_DEGREES"])
-            self.robot_state = "straight" # Reset state after handling obstacle
+            self.avoid_obstacle()
 
         # Straight
         elif self.robot_state == "straight":
