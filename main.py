@@ -3,14 +3,25 @@ from pybricks.hubs import PrimeHub
 from pybricks.robotics import DriveBase
 from pybricks.parameters import Port, Color, Axis, Direction, Button, Stop
 
-DRIVEBASE_WHEEL_DIAMETER = 56
-DRIVEBASE_AXLE_TRACK = 112
-ROBOT_SPEED = 500
-ROBOT_ACCELERATION = 750
-ROBOT_TURN_RATE = 750
-ROBOT_TURN_ACCELERATION = 3000
-ROBOT_MOVE_SPEED = 350
-ROBOT_TURNING_DEGREES = 6
+# --- CONSTANTS ---
+CONSTANTS = {
+    "DRIVEBASE_WHEEL_DIAMETER": 56,
+    "DRIVEBASE_AXLE_TRACK": 112,
+    "ROBOT_SPEED": 500,
+    "ROBOT_ACCELERATION": 750,
+    "ROBOT_TURN_RATE": 750,
+    "ROBOT_TURN_ACCELERATION": 3000,
+    "ROBOT_MOVE_SPEED": 350,
+    "ROBOT_TURNING_DEGREES": 6,
+    "ULTRASONIC_THRESHOLD": 80,
+    "TURN_GREEN_DEGREES": 75,
+    "CURVE_RADIUS_GREEN": 75,
+    "CURVE_RADIUS_OBSTACLE": 200,
+    "OBSTACLE_TURN_DEGREES": 140,
+    "OBSTACLE_INITIAL_TURN_DEGREES": 90,
+    "OBSTACLE_FINAL_TURN_DEGREES": 45,
+    "CURVE_RADIUS_LINE_FOLLOW": 25, # Added constant for line following curve radius
+}
 
 ports = {
     "left_drive": Port.E,
@@ -32,52 +43,59 @@ class Robot:
         self.ultrasonic_sensor = UltrasonicSensor(ports["ultrasonic_sensor"])
         self.arm_motor = Motor(ports["arm_motor"])
 
-        self.drivebase = DriveBase(self.left_drive, self.right_drive, DRIVEBASE_WHEEL_DIAMETER, DRIVEBASE_AXLE_TRACK)
+        self.drivebase = DriveBase(
+            self.left_drive,
+            self.right_drive,
+            CONSTANTS["DRIVEBASE_WHEEL_DIAMETER"],
+            CONSTANTS["DRIVEBASE_AXLE_TRACK"]
+        )
         self.drivebase.use_gyro(False)
         self.drivebase.settings(
-            straight_speed=ROBOT_SPEED, 
-            straight_acceleration=ROBOT_ACCELERATION, 
-            turn_rate=ROBOT_TURN_RATE, 
-            turn_acceleration=ROBOT_TURN_ACCELERATION
+            straight_speed=CONSTANTS["ROBOT_SPEED"],
+            straight_acceleration=CONSTANTS["ROBOT_ACCELERATION"],
+            turn_rate=CONSTANTS["ROBOT_TURN_RATE"],
+            turn_acceleration=CONSTANTS["ROBOT_TURN_ACCELERATION"]
         )
 
-        self.robot_state = "obstacle"
-    
-    def turn_in_degrees(self, degrees=ROBOT_TURNING_DEGREES):
-        """Turns in degrees."""
-        self.drivebase.curve(25, degrees, Stop.COAST, False)
-    
-    def short_turn_in_degrees(self, degrees):
+        self.robot_state = "obstacle" # Initial state
+
+    def turn_in_degrees(self, degrees):
+        """Turn in degrees. Using a curve for line following."""
+        self.drivebase.curve(CONSTANTS["CURVE_RADIUS_LINE_FOLLOW"], degrees, Stop.COAST, False)
+
+    def sharp_turn_in_degrees(self, degrees):
+        """Perform a sharp turn in degrees."""
         self.drivebase.turn(degrees)
-    
+
     def move_forward(self, distance, speed=None):
-        """Moves forward in mm."""
+        """Move forward in mm."""
         if speed is not None:
             self.set_speed(speed)
         self.drivebase.straight(distance)
-    
+
     def start_motors(self, left_speed, right_speed):
+        """Start the motors, if not already started, each with the specified speed."""
         if not self.left_drive.speed() == left_speed:
             self.left_drive.run(left_speed)
         if not self.right_drive.speed() == right_speed:
             self.right_drive.run(right_speed)
-    
+
     def stop_motors(self):
+        """Stop the motors."""
         self.left_drive.stop()
         self.right_drive.stop()
 
     def set_speed(self, speed):
-        """Sets the speed of the robot in drivebase settings."""
+        """Set the speed of the robot in drivebase settings."""
         if speed == 0:
-            speed = ROBOT_SPEED
+            speed = CONSTANTS["ROBOT_SPEED"]
         self.drivebase.settings(straight_speed=speed)
 
     def information_to_color(self, information):
-        # if information["reflection"] == 100:
-        #     return Color.GRAY
+        """Convert color sensor information to a color."""
         if information["color"] == Color.WHITE:
             return Color.WHITE
-        elif information["color"] == Color.GREEN and information["hsv"].h > 135 and information["hsv"].h < 165:
+        elif information["color"] == Color.GREEN and 135 < information["hsv"].h < 165:
             return Color.GREEN
         elif information["color"] == Color.BLUE and information["hsv"].s > 80 and information["hsv"].v > 80:
             return Color.BLUE
@@ -85,12 +103,13 @@ class Robot:
             return Color.RED
         elif information["color"] == Color.RED: # information["hsv"].s <= 85
             return Color.ORANGE
-        elif information["hsv"].s < 20 and information["reflection"] < 30 and information["reflection"] > 3:
+        elif information["hsv"].s < 20 and 3 < information["reflection"] < 30:
             return Color.BLACK
-        else: 
+        else:
             return Color.NONE
-    
+
     def get_colors(self):
+        """Get the reflection, color, and HSV values of the left and right color sensors to be used for color detection."""
         self.left_color_sensor_information = {
             "reflection": self.color_sensor_left.reflection(),
             "color": self.color_sensor_left.color(),
@@ -106,74 +125,71 @@ class Robot:
         self.right_color = self.information_to_color(self.right_color_sensor_information)
 
     def turn_green(self, direction):
+        """When there is a green on the left or the right, react to it by doing a larger turn left or right."""
         if direction == "left":
-            degrees = -75
+            degrees = -CONSTANTS["TURN_GREEN_DEGREES"] 
         else:
-            degrees = 75
-
-        self.drivebase.curve(75, degrees, Stop.COAST, True)
+            degrees = CONSTANTS["TURN_GREEN_DEGREES"]
+        
+        self.drivebase.curve(CONSTANTS["CURVE_RADIUS_GREEN"], degrees, Stop.COAST, True)
 
     def update(self):
+        """Update the state of the robot."""
         self.get_colors()
         self.ultrasonic = self.ultrasonic_sensor.distance()
 
-        # check for obstacle
-        if self.ultrasonic < 80:
+        # Check for obstacle
+        if self.ultrasonic < CONSTANTS["ULTRASONIC_THRESHOLD"]:
             self.robot_state = "obstacle"
-            return
+            return # Exit update early if obstacle detected
 
-        # forward
-        if self.left_color == Color.WHITE and self.right_color == Color.WHITE:
+        # Forward (white on both, or black on both)
+        if (self.left_color == Color.WHITE and self.right_color == Color.WHITE) or \
+           (self.left_color == Color.BLACK and self.right_color == Color.BLACK):
             self.robot_state = "straight"
 
-        # black line following
-        elif self.left_color == Color.BLACK and self.robot_state != "left":
-            self.robot_state = "new left" # new will mean that it will stop then turn
-        elif self.right_color == Color.BLACK and self.robot_state != "right":
-            self.robot_state = "new right"
+        # Black line following
+        elif self.left_color == Color.BLACK:
+            self.robot_state = "left" # Directly transition to "left"
+        elif self.right_color == Color.BLACK:
+            self.robot_state = "right" # Directly transition to "right"
 
-        # green
+        # Green
         elif self.left_color == Color.GREEN:
             self.robot_state = "green left"
         elif self.right_color == Color.GREEN:
             self.robot_state = "green right"
 
-        # nothing
+        # Nothing
         else:
             self.robot_state = "stop"
 
     def move(self):
-        # obstackle
+        """Move the robot based on its current state."""
+        # Obstacle
         if self.robot_state == "obstacle":
             self.stop_motors()
-            self.short_turn_in_degrees(90)
-            self.drivebase.curve(200, -140, Stop.BRAKE, True)
-            self.start_motors(ROBOT_MOVE_SPEED, ROBOT_MOVE_SPEED)
-            self.get_colors()
-            while self.right_color == Color.WHITE:
+            self.sharp_turn_in_degrees(CONSTANTS["OBSTACLE_INITIAL_TURN_DEGREES"])
+            self.drivebase.curve(CONSTANTS["CURVE_RADIUS_OBSTACLE"], -CONSTANTS["OBSTACLE_TURN_DEGREES"], Stop.BRAKE, True)
+            self.start_motors(CONSTANTS["ROBOT_MOVE_SPEED"], CONSTANTS["ROBOT_MOVE_SPEED"])
+
+            self.get_colors() # Re-read colors after turning
+            while self.right_color == Color.WHITE: # Keep turning until right sensor sees something other than white
                 self.get_colors()
-            self.turn_in_degrees(45)
-            self.robot_state = "straight"
+            self.turn_in_degrees(CONSTANTS["OBSTACLE_FINAL_TURN_DEGREES"])
+            self.robot_state = "straight" # Reset state after handling obstacle
 
-        # straight
-        if self.robot_state == "straight":
-            self.start_motors(ROBOT_MOVE_SPEED, ROBOT_MOVE_SPEED)
+        # Straight
+        elif self.robot_state == "straight":
+            self.start_motors(CONSTANTS["ROBOT_MOVE_SPEED"], CONSTANTS["ROBOT_MOVE_SPEED"])
 
-        elif self.robot_state == "new left": # this will stop, then set it to left
-            self.stop_motors()
-            self.turn_in_degrees(-ROBOT_TURNING_DEGREES)
-            self.robot_state = "left"
-        elif self.robot_state == "left": # left, no stopping
-            self.turn_in_degrees(-ROBOT_TURNING_DEGREES)
+        # Black line following - now immediately turns
+        elif self.robot_state == "left":
+            self.turn_in_degrees(-CONSTANTS["ROBOT_TURNING_DEGREES"]) # Turn left
+        elif self.robot_state == "right":
+            self.turn_in_degrees(CONSTANTS["ROBOT_TURNING_DEGREES"]) # Turn right
 
-        elif self.robot_state == "new right": # this will stop, then set it to right
-            self.stop_motors()
-            self.turn_in_degrees(ROBOT_TURNING_DEGREES)
-            self.robot_state = "right"
-        elif self.robot_state == "right": # right, no stopping
-            self.turn_in_degrees(ROBOT_TURNING_DEGREES)
-        
-        # green
+        # Green
         elif self.robot_state == "green left":
             self.stop_motors()
             self.turn_green("left")
@@ -181,21 +197,23 @@ class Robot:
             self.stop_motors()
             self.turn_green("right")
 
-        # stop
+        # Stop
         elif self.robot_state == "stop":
             self.stop_motors()
-        
-    def debug(self):       
+
+    def debug(self):
+        """Print debug text."""
         print(self.left_color_sensor_information, self.left_color)
-    
+
     def run(self):
+        """Run the robot."""
         while True:
             self.update()
             self.move()
-            self.debug()
+            # self.debug()
 
 def main():
     robot = Robot()
     robot.run()
 
-main()
+main() # Note: don't put in if __name__ == "__main__" because __name__ is something different for robot
