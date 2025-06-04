@@ -20,7 +20,7 @@ CONSTANTS = {
     "OBSTACLE_TURN_DEGREES": 140,
     "OBSTACLE_INITIAL_TURN_DEGREES": 90,
     "OBSTACLE_FINAL_TURN_DEGREES": 45,
-    "CURVE_RADIUS_LINE_FOLLOW": 25, # Added constant for line following curve radius
+    "CURVE_RADIUS_LINE_FOLLOW": 25,
 }
 
 ports = {
@@ -58,6 +58,7 @@ class Robot:
         )
 
         self.robot_state = "obstacle" # Initial state
+        self.iteration_count = 0 # Initialize the iteration counter
 
     def turn_in_degrees(self, degrees):
         """Turn in degrees. Using a curve for line following."""
@@ -209,8 +210,8 @@ class Robot:
         print(self.left_color_sensor_information, self.left_color)
 
     def run(self):
-        """Run the robot."""
         while True:
+            self.iteration_count += 1 # Increment the counter at the start of each loop
             self.update()
             self.move()
             # self.debug()
