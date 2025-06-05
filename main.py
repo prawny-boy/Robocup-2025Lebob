@@ -31,6 +31,7 @@ ports = {
     "arm_motor": Port.F,
 }
 
+
 class Robot:
     def __init__(self):
         self.hub = PrimeHub(Axis.Z, Axis.X)
@@ -70,7 +71,7 @@ class Robot:
     def battery_display(self):
         v = self.hub.battery.voltage()
         vPct = rescale(v, LOW_VOLTAGE, HIGH_VOLTAGE, 1, 100)
-        print(f"Battery %: {round(vPct,1)}, Voltage: {v}")
+        print(f"Battery %: {round(vPct, 1)}, Voltage: {v}")
         if vPct < 70:
             if vPct < 40:
                 print("EMERGENCY: BATTERY LOW!")
@@ -142,14 +143,6 @@ class Robot:
         err = l - r
         rate = max(min(KP * err, MAX_TURN_RATE), -MAX_TURN_RATE)
         self.drivebase.drive(LINE_SPEED, rate)
-         
-      #  self.get_colors()
-      #  if self.left_color == Color.WHITE and self.right_color == Color.WHITE:
-      #      self.start_motors(MAX_TURN_RATE, MAX_TURN_RATE)
-      #  elif self.left_color == Color.WHITE:
-      #      self.start_motors(MAX_TURN_RATE,  0)
-      #  elif self.right_color == Color.WHITE:
-      #      self.start_motors(0, MAX_TURN_RATE)
 
     def avoid_obstacle(self):
         self.stop_motors()
