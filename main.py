@@ -14,12 +14,13 @@ LOW_VOLTAGE = 7000
 HIGH_VOLTAGE = 8300
 
 # line following tuning
-ROBOT_FORWARD_SPEED = 200            # deg/s motor speedi in degrees per second
+ROBOT_FORWARD_SPEED = 300           # deg/s motor speedi in degrees per second
 PI = 3.14159265358979323846264338327950288419716939937510
 LINE_SPEED = ROBOT_FORWARD_SPEED * PI * DRIVEBASE_WHEEL_DIAMETER / 360  # mm/s
 KP = 3         # proportional gain
 MAX_TURN_RATE = 500  # deg/s
-GREEN_TURN_DEGREES = 60  # degrees to turn when green detected
+GREEN_TURN_DEGREES = 120  # degrees to turn when green detected
+GREEN_TURN_RADIUS = 60
 
 # ports
 ports = {
@@ -55,6 +56,7 @@ class Robot:
             ROBOT_TURN_ACCELERATION
         )
         self.robot_state = "obstacle"
+        self.green_cooldown = 0
 
     def intro_sound(self):
         self.hub.speaker.volume(100)
@@ -134,8 +136,34 @@ class Robot:
         self.right_color = self.information_to_color(r)
 
     def green(self, dir):
-        d = -GREEN_TURN_DEGREES if dir == "left" else GREEN_TURN_DEGREES
-        self.drivebase.curve(GREEN_TURN_DEGREES, d, Stop.COAST, True)
+        # original code
+        # d = -GREEN_TURN_DEGREES if dir == "left" else GREEN_TURN_DEGREES
+        # self.drivebase.curve(GREEN_TURN_DEGREES, d, Stop.COAST, False)
+
+        # better edition maybe, doesnt work yet
+        direction = -GREEN_TURN_DEGREES if dir == "left" else GREEN_TURN_DEGREES
+        self.drivebase.curve(GREEN_TURN_RADIUS, direction, Stop.COAST, False)
+        # if dir == "left":
+        #     offset_left = 20
+        #     offset_right = 0
+        # else:
+        #     offset_right = 20
+        #     offset_left = 0
+        # self.start_motors(direction_speed - offset_left, direction_speed - offset_right)
+        ticks = 0
+        while not self.drivebase.done():    
+            self.get_colors()
+            if ticks > 15:
+                if dir == "left":
+                    if self.right_color == Color.BLACK:
+                        break
+                if dir == "right":
+                    if self.left_color == Color.BLACK:
+                        break
+            ticks += 1
+            print(ticks)
+        self.stop_motors()
+        self.green_cooldown = 180
 
     def follow_line(self):
         l = self.color_sensor_left.reflection()
@@ -162,12 +190,13 @@ class Robot:
         if self.ultrasonic < 80:
             self.robot_state = "obstacle"
             return
-        if self.left_color == Color.GREEN:
-            self.robot_state = "green left"
-            return
-        if self.right_color == Color.GREEN:
-            self.robot_state = "green right"
-            return
+        if self.green_cooldown == 0:
+            if self.left_color == Color.GREEN:
+                self.robot_state = "green left"
+                return
+            if self.right_color == Color.GREEN:
+                self.robot_state = "green right"
+                return
         on_l = self.left_color == Color.WHITE
         on_r = self.right_color == Color.WHITE
         prev = self.robot_state
@@ -179,10 +208,13 @@ class Robot:
             self.robot_state = "new left"
         else:
             self.robot_state = prev
+        if self.green_cooldown > 0:
+            self.green_cooldown -= 1
 
     def move(self):
         if self.robot_state == "obstacle":
-            self.avoid_obstacle()
+            pass
+            # self.avoid_obstacle()
 
         elif self.robot_state in ("green left", "green right"):
             self.stop_motors()
