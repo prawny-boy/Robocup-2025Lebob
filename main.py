@@ -9,18 +9,18 @@ ALLOW_YELLOW = False
 CONSTANTS = {
     "DRIVEBASE_WHEEL_DIAMETER": 56,
     "DRIVEBASE_AXLE_TRACK": 112,
-    "DEFAULT_SPEED": 150,
     "ARM_MOVE_SPEED": 500,
-    "DEFAULT_ACCELERATION": 750,
-    "DEFAULT_TURN_RATE": 750,
-    "DEFAULT_TURN_ACCELERATION": 3000,
+    "DEFAULT_SPEED": 130,
+    "DEFAULT_ACCELERATION": 600,
+    "DEFAULT_TURN_RATE": 600,
+    "DEFAULT_TURN_ACCELERATION": 2000,
     "OBSTACLE_MOVE_SPEED": 300,
-    "MOVE_SPEED": 150,
-    "ULTRASONIC_THRESHOLD": 80,
-    "TURN_GREEN_DEGREES": 60,
+    "MOVE_SPEED": 130,
+    "ULTRASONIC_THRESHOLD": 70,
+    "TURN_GREEN_DEGREES": 70,
     "TURN_YELLOW_DEGREES": 20,
     "CURVE_RADIUS_GREEN": 80,
-    "CURVE_RADIUS_OBSTACLE": 200,
+    "CURVE_RADIUS_OBSTACLE": 130,
     "OBSTACLE_TURN_DEGREES": 140,
     "OBSTACLE_INITIAL_TURN_DEGREES": 90,
     "OBSTACLE_FINAL_TURN_DEGREES": 45,
@@ -57,18 +57,22 @@ class Robot:
             CONSTANTS["DRIVEBASE_AXLE_TRACK"]
         )
         self.drivebase.use_gyro(False)
+        self.settings_default()
+
+        self.robot_state = "obstacle" # Initial state
+        self.iteration_count = 0 # Initialize the iteration counter
+        self.shortcut_cooldown_end = 0
+        self.black_counter = 0
+        self.on_inverted = False
+
+    def settings_default(self):
         self.drivebase.settings(
             straight_speed=CONSTANTS["DEFAULT_SPEED"],
             straight_acceleration=CONSTANTS["DEFAULT_ACCELERATION"],
             turn_rate=CONSTANTS["DEFAULT_TURN_RATE"],
             turn_acceleration=CONSTANTS["DEFAULT_TURN_ACCELERATION"]
         )
-
-        self.robot_state = "obstacle" # Initial state
-        self.iteration_count = 0 # Initialize the iteration counter
-        self.shortcut_cooldown_end = 0
-        self.black_counter = 0
-
+    
     def battery_display(self):
         battery_voltage = self.hub.battery.voltage()
 
@@ -100,9 +104,9 @@ class Robot:
         self.left_drive.stop()
         self.right_drive.stop()
 
-    def rotate_arm(self, degrees):
+    def rotate_arm(self, degrees, stop_method=Stop.BRAKE):
         """Rotate the arm's motor based on degrees."""
-        self.arm_motor.run_angle(CONSTANTS["ARM_MOVE_SPEED"], degrees, Stop.BRAKE, False)
+        self.arm_motor.run_angle(CONSTANTS["ARM_MOVE_SPEED"], degrees, stop_method, False)
 
     def set_speed(self, speed):
         """Set the speed of the robot in drivebase settings."""
@@ -112,7 +116,7 @@ class Robot:
 
     def information_to_color(self, information):
         """Convert color sensor information to a color."""
-        if information["reflection"] == 100:
+        if information["reflection"] > 97: # Probably needs to be better
             return Color.GRAY
         elif information["color"] == Color.WHITE:
             return Color.WHITE
@@ -126,10 +130,11 @@ class Robot:
             return Color.RED
         elif information["color"] == Color.RED: # information["hsv"].s <= 85
             return Color.ORANGE
-        elif information["hsv"].s < 25 and 3 < information["reflection"] < 30:
+        elif information["hsv"].s < 25 and information["reflection"] < 30:
             return Color.BLACK
         else:
             return Color.NONE
+            # Could try return Color.BLACK
 
     def get_colors(self):
         """Get the reflection, color, and HSV values of the left and right color sensors to be used for color detection."""
@@ -197,52 +202,47 @@ class Robot:
         return lowest_ultrasonic, lowest_ultrasonic_angle
     
     def gray_ending(self):
-        self.move_forward(30)
+        self.drivebase.settings(
+            straight_speed=80,
+            straight_acceleration=450,
+            turn_rate=400,
+            turn_acceleration=1600
+        )
+
+        self.move_forward(290)
+        self.move_forward(-20)
 
         self.stop_motors()
+
+        lowest_ultrasonic, lowest_ultrasonic_angle = self.turn_and_detect_ultrasonic(360)
+
+        self.drivebase.reset()
+        self.sharp_turn_in_degrees(lowest_ultrasonic_angle)
+        self.move_forward(lowest_ultrasonic - 20)
+        self.rotate_arm(180)
+
+        self.sharp_turn_in_degrees(180)
+        self.move_forward(lowest_ultrasonic - 20)
+
+        self.sharp_turn_in_degrees(-lowest_ultrasonic_angle)
         
-        lowest_ultrasonic = 2000
-        lowest_ultrasonic_angle = 0
-
-        angles = [-90, 180, 90]
-        for i, angle in enumerate(angles):
-            new_ultrasonic, new_ultrasonic_angle = self.turn_and_detect_ultrasonic(angle)
-
-            if 1 != 0:
-                original_angle = sum(angles[:i])
-            else:
-                original_angle = 0
-            
-            new_ultrasonic_angle += original_angle
-
-            if new_ultrasonic < lowest_ultrasonic:
-                lowest_ultrasonic = new_ultrasonic
-                lowest_ultrasonic_angle = new_ultrasonic_angle
-        
-        if lowest_ultrasonic != 2000: # Sensed the can
-            self.drivebase.reset()
-            self.sharp_turn_in_degrees(lowest_ultrasonic_angle)
-            self.move_forward(lowest_ultrasonic - 10)
-            self.rotate_arm(180)
-
-            self.sharp_turn_in_degrees(180)
-            self.move_forward(lowest_ultrasonic - 10)
-
-            self.sharp_turn_in_degrees(-lowest_ultrasonic_angle)
-        
-        self.move_forward(30)
+        self.move_forward(270)
 
         # Back at the gray here
 
-        self.move_forward(50)
-        self.sharp_turn_in_degrees(60)
+        self.sharp_turn_in_degrees(45)
         self.rotate_arm(-180)
-        self.sharp_turn_in_degrees(-60)
+        self.sharp_turn_in_degrees(-45)
+
+        self.settings_default()
+
+        self.move_forward(10)
 
     def avoid_obstacle(self):
         self.stop_motors()
         self.rotate_arm(-90)
         self.sharp_turn_in_degrees(CONSTANTS["OBSTACLE_INITIAL_TURN_DEGREES"])
+        self.set_speed(CONSTANTS["OBSTACLE_MOVE_SPEED"])
         self.drivebase.curve(CONSTANTS["CURVE_RADIUS_OBSTACLE"], -CONSTANTS["OBSTACLE_TURN_DEGREES"], Stop.BRAKE, True)
         self.start_motors(CONSTANTS["OBSTACLE_MOVE_SPEED"], CONSTANTS["OBSTACLE_MOVE_SPEED"])
 
@@ -252,6 +252,7 @@ class Robot:
         self.turn_in_degrees(CONSTANTS["OBSTACLE_FINAL_TURN_DEGREES"])
         self.robot_state = "straight" # Reset state after handling obstacle
         self.rotate_arm(90)
+        self.set_speed(CONSTANTS["DEFAULT_SPEED"])
     
     def update(self):
         """Update the state of the robot."""
@@ -305,7 +306,7 @@ class Robot:
 
         # Nothing
         else:
-            pass
+            self.robot_state = "line"
             # self.robot_state = "stop"
 
     def move(self):
@@ -342,13 +343,14 @@ class Robot:
         """Print debug text."""
         # print(self.robot_state)
         # print(self.left_color_sensor_information, self.left_color)
-        # print(self.right_color_sensor_information, self.right_color)
+        print(self.right_color_sensor_information, self.right_color)
         # print(self.left_color, self.right_color)
         # print(self.iteration_count)
-        print(self.ultrasonic)
+        # print(self.ultrasonic)
 
     def run(self):
         self.battery_display()
+        self.rotate_arm(180, Stop.COAST_SMART) # Reset
         while True:
             self.iteration_count += 1 # Increment the counter at the start of each loop
             self.update()
