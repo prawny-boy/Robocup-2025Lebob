@@ -15,14 +15,16 @@ CONSTANTS = {
     "OBSTACLE_MOVE_SPEED": 300,
     "MOVE_SPEED": 150,
     "ULTRASONIC_THRESHOLD": 80,
-    "TURN_GREEN_DEGREES": 75,
-    "CURVE_RADIUS_GREEN": 75,
+    "TURN_GREEN_DEGREES": 60,
+    "TURN_YELLOW_DEGREES": 20,
+    "CURVE_RADIUS_GREEN": 80,
     "CURVE_RADIUS_OBSTACLE": 200,
     "OBSTACLE_TURN_DEGREES": 140,
     "OBSTACLE_INITIAL_TURN_DEGREES": 90,
     "OBSTACLE_FINAL_TURN_DEGREES": 45,
     "CURVE_RADIUS_LINE_FOLLOW": 4,
-    "MAX_TURN_RATE": 500
+    "MAX_TURN_RATE": 500,
+    "BLACK_COUNTER_THRESHOLD": 1000,
 }
 
 ports = {
@@ -44,6 +46,7 @@ class Robot:
         self.color_sensor_right = ColorSensor(ports["color_sensor_right"])
         self.ultrasonic_sensor = UltrasonicSensor(ports["ultrasonic_sensor"])
         self.arm_motor = Motor(ports["arm_motor"])
+        self.previous_state = "line"
 
         self.drivebase = DriveBase(
             self.left_drive,
@@ -61,15 +64,17 @@ class Robot:
 
         self.robot_state = "obstacle" # Initial state
         self.iteration_count = 0 # Initialize the iteration counter
+        self.shortcut_cooldown_end = 0
+        self.black_counter = 0
 
     def battery_display(self):
         battery_voltage = self.hub.battery.voltage()
 
         print("Battery:", battery_voltage)
     
-    def turn_in_degrees(self, degrees):
+    def turn_in_degrees(self, degrees, wait=False):
         """Turn in degrees. Using a curve for line following."""
-        self.drivebase.curve(CONSTANTS["CURVE_RADIUS_LINE_FOLLOW"], degrees, Stop.COAST, False)
+        self.drivebase.curve(CONSTANTS["CURVE_RADIUS_LINE_FOLLOW"], degrees, Stop.COAST, wait)
 
     def sharp_turn_in_degrees(self, degrees):
         """Perform a sharp turn in degrees."""
@@ -107,6 +112,8 @@ class Robot:
         """Convert color sensor information to a color."""
         if information["color"] == Color.WHITE:
             return Color.WHITE
+        elif information["hsv"].h < 67 and information["hsv"].h > 45:
+            return Color.YELLOW
         elif information["color"] == Color.GREEN and 135 < information["hsv"].h < 165:
             return Color.GREEN
         elif information["color"] == Color.BLUE and information["hsv"].s > 80 and information["hsv"].v > 80:
@@ -115,7 +122,7 @@ class Robot:
             return Color.RED
         elif information["color"] == Color.RED: # information["hsv"].s <= 85
             return Color.ORANGE
-        elif information["hsv"].s < 20 and 3 < information["reflection"] < 30:
+        elif information["hsv"].s < 25 and 3 < information["reflection"] < 30:
             return Color.BLACK
         else:
             return Color.NONE
@@ -147,13 +154,22 @@ class Robot:
 
     def follow_line(self):
         reflection_difference = self.left_color_sensor_information["reflection"] - self.right_color_sensor_information["reflection"]
-        turn_rate = max(min(3.3 * reflection_difference, CONSTANTS["MAX_TURN_RATE"]), -CONSTANTS["MAX_TURN_RATE"]) # Clamp 3.3 * reflection_difference to max turn rate
+        turn_rate = max(min(3.2 * reflection_difference, CONSTANTS["MAX_TURN_RATE"]), -CONSTANTS["MAX_TURN_RATE"])
         self.drivebase.drive(CONSTANTS["MOVE_SPEED"], turn_rate)
 
         while not self.drivebase.done(): # To check if both are black
             self.get_colors()
             if self.left_color == Color.BLACK and self.right_color == Color.BLACK:
                 self.stop_motors()
+                self.black_counter += 1
+    
+    def follow_color(self, color_to_follow=Color.YELLOW):
+        if self.left_color == color_to_follow:
+            self.turn_in_degrees(-CONSTANTS["TURN_YELLOW_DEGREES"])
+        elif self.right_color == color_to_follow:
+            self.turn_in_degrees(CONSTANTS["TURN_YELLOW_DEGREES"])
+        else:
+            self.drivebase.drive(CONSTANTS["MOVE_SPEED"], 0)
 
     def avoid_obstacle(self):
         self.stop_motors()
@@ -174,19 +190,41 @@ class Robot:
         self.get_colors()
         self.ultrasonic = self.ultrasonic_sensor.distance()
 
+        self.previous_state = self.robot_state
+
+        if self.left_color == Color.BLACK and self.right_color == Color.BLACK:
+            self.black_counter += 1
+        else:
+            self.black_counter = 0
+        
+        if self.black_counter > CONSTANTS["BLACK_COUNTER_THRESHOLD"]:
+            self.on_inverted = True
+        if self.left_color == Color.WHITE and self.right_color == Color.WHITE:
+            self.on_inverted = False
+        
         # Check for obstacle
         if self.ultrasonic < CONSTANTS["ULTRASONIC_THRESHOLD"]:
-            self.robot_state = "obstacle"
+            # self.robot_state = "obstacle"
             return # Exit update early if obstacle detected
 
+        # Shortcut / Yellow
+        elif self.left_color == Color.YELLOW or self.right_color == Color.YELLOW:
+            self.robot_state = "yellow line"
+            if self.robot_state != self.previous_state and self.iteration_count > self.shortcut_cooldown_end:
+                self.shortcut_cooldown_end = self.iteration_count + 1000
+
+                if self.left_color == Color.YELLOW:
+                    self.turn_in_degrees(-90)
+                if self.right_color == Color.YELLOW:
+                    self.turn_in_degrees(90)
+        
         # Line
-        if (self.left_color == Color.WHITE and self.right_color == Color.WHITE) or \
-           (self.left_color == Color.BLACK and self.right_color == Color.BLACK) or \
-            (self.left_color == Color.BLACK and self.right_color == Color.WHITE) or \
-            (self.left_color == Color.WHITE and self.right_color == Color.BLACK):
+        elif self.iteration_count > self.shortcut_cooldown_end and \
+            self.left_color in [Color.WHITE, Color.BLACK] and \
+            self.right_color in [Color.WHITE, Color.BLACK]:
             self.robot_state = "line"
 
-        # Green
+        # Turn / Green
         elif self.left_color == Color.GREEN:
             self.robot_state = "green left"
         elif self.right_color == Color.GREEN:
@@ -203,6 +241,10 @@ class Robot:
         if self.robot_state == "obstacle":
             self.avoid_obstacle()
 
+        # ShortcutYellow
+        elif self.robot_state == "yellow line":
+            self.follow_color()
+        
         # Line
         elif self.robot_state == "line":
             self.follow_line()
@@ -221,7 +263,11 @@ class Robot:
 
     def debug(self):
         """Print debug text."""
+        # print(self.robot_state)
         print(self.left_color_sensor_information, self.left_color)
+        # print(self.right_color_sensor_information, self.right_color)
+        # print(self.left_color, self.right_color)
+        # print(self.iteration_count)
 
     def run(self):
         self.battery_display()
@@ -229,7 +275,7 @@ class Robot:
             self.iteration_count += 1 # Increment the counter at the start of each loop
             self.update()
             self.move()
-            # self.debug()
+            self.debug()
 
 def main():
     robot = Robot()
