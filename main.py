@@ -2,6 +2,7 @@ from pybricks.pupdevices import Motor, ColorSensor, UltrasonicSensor
 from pybricks.hubs import PrimeHub
 from pybricks.robotics import DriveBase
 from pybricks.parameters import Port, Color, Axis, Direction, Stop
+from pybricks.tools import StopWatch
 
 # constants
 DRIVEBASE_WHEEL_DIAMETER = 56
@@ -137,6 +138,62 @@ class Robot:
         d = -GREEN_TURN_DEGREES if dir == "left" else GREEN_TURN_DEGREES
         self.drivebase.curve(GREEN_TURN_DEGREES, d, Stop.COAST, True)
 
+    def spill(self):
+        # this function assumes that short_turn_in_degrees() turns on the spot, not curves
+        max_dist_sense = 580 # maximum distance to sense the can
+        max_dist = (0, 0) # (distance, degrees)
+        min_dist = 0 # distance being sensed
+        self.move_forward(50, ROBOT_FORWARD_SPEED) # move forward to get a better view
+        deg = -1
+        # some parts in this loop may be redundant
+        while deg >= (-100):
+            self.short_turn_in_degrees(-1) #turning in one degree increments
+            #could just remove the loop and turn 100 without waiting, and making a loop that 
+            #checks the distance sensor and compares it.
+            min_dist = self.ultrasonic_sensor.distance() # might be redundant, can be optimized
+            if min_dist > max_dist and min_dist <= max_dist_sense:
+                max_dist = (min_dist, deg) # resetting the max distance and logging what degree it was found
+            deg -= 1
+        if max_dist[0] == 0: # if it is 1, it means that the can was not sensed
+            deg = 1 # resets the above loop to turn right and sense the can
+            self.short_turn_in_degrees(100) # resetting to the original position
+            while deg <= 100:
+                self.short_turn_in_degrees(1)
+                min_dist = self.ultrasonic_sensor.distance()
+                if min_dist > max_dist[0] and min_dist <= max_dist_sense:
+                    max_dist = (min_dist, deg)
+                deg += 1
+            self.short_turn_in_degrees(-(100-max_dist[1])) # turning to the can right
+        else:
+            self.short_turn_in_degrees(100-max_dist[1]) # turning to the can left
+        
+        # this part is moving to the can and picking it up
+        self.start_motors(ROBOT_FORWARD_SPEED, ROBOT_FORWARD_SPEED)
+        start_time = StopWatch.time() # starting when the motors start
+        while self.ultrasonic_sensor.distance() > 50: # "do until" loop, might need to change the distance
+            pass
+        self.stop_motors() # stopping the motors when the can is close enough
+        elapsed_time = StopWatch.time() - start_time # calculating the elapsed time
+        self.arm_motor.run_angle(500, 0, Stop.HOLD, wait=True) # moving the arm motor down
+        self.start_motors(-ROBOT_FORWARD_SPEED, -ROBOT_FORWARD_SPEED) # moving backwards to the original position with the can
+        start_time = StopWatch.time() 
+        while (StopWatch.time() - start_time) < elapsed_time: # making sure that the robot moves back for 
+                                                              # the same amount of time it moved forward
+            pass
+        self.stop_motors()
+        self.short_turn_in_degrees(-max_dist[1]) # turning back to the original position
+        self.short_turn_in_degrees(180) # turning around to the other side
+        self.move_forward(50, ROBOT_FORWARD_SPEED) # moving forward to exit the spill area
+        self.stop_motors() 
+        self.short_turn_in_degrees(45) # turning the can away from the line and allowing the robot to continue
+        self.stop_motors()
+        self.arm_motor.run_angle(-500, 0, Stop.HOLD, wait=True) # lifting the arm motor back up
+        self.short_turn_in_degrees(-45) # turning back to the original position
+        self.robot_state = "straight" # resetting the robot state to straight
+        return
+
+
+
     def follow_line(self):
         l = self.color_sensor_left.reflection()
         r = self.color_sensor_right.reflection()
@@ -168,6 +225,9 @@ class Robot:
         if self.right_color == Color.GREEN:
             self.robot_state = "green right"
             return
+        if self.right_color == Color.GRAY or self.left_color == Color.GRAY:
+            self.robot_state = "spill"
+            return
         on_l = self.left_color == Color.WHITE
         on_r = self.right_color == Color.WHITE
         prev = self.robot_state
@@ -187,6 +247,10 @@ class Robot:
         elif self.robot_state in ("green left", "green right"):
             self.stop_motors()
             self.green(self.robot_state.split()[1])
+
+        elif self.robot_state == "spill":
+            self.stop_motors()
+            self.spill()
 
         else:
             self.follow_line()
