@@ -352,7 +352,7 @@ class Robot:
         while True:
             self.iteration_count += 1 # Increment the counter at the start of each loop
             self.update()
-            # self.move()
+            self.move()
             self.debug()
 
 def main():
