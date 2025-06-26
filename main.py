@@ -61,9 +61,16 @@ class Robot:
 
         self.robot_state = "obstacle" # Initial state
         self.iteration_count = 0 # Initialize the iteration counter
-        self.shortcut_cooldown_end = 0
         self.black_counter = 0
         self.on_inverted = False
+
+        self.shortcut_information = {
+            "is following shortcut": False, # If the robot is following a shortcut
+            "first turned": None, # Which direction the robot turned first due to a shortcut
+            "left seen black since": False, # If the left sensor has seen black since the last shortcut
+            "right seen black since": False # If the right sensor has seen black since the last shortcut
+        }
+        self.default_shortcut_information = self.shortcut_information.copy()
 
     def settings_default(self):
         self.drivebase.settings(
@@ -86,11 +93,11 @@ class Robot:
         """Perform a sharp turn in degrees."""
         self.drivebase.turn(degrees)
 
-    def move_forward(self, distance, speed=None):
+    def move_forward(self, distance, speed=None, wait=False):
         """Move forward in mm."""
         if speed is not None:
             self.set_speed(speed)
-        self.drivebase.straight(distance)
+        self.drivebase.straight(distance, wait)
 
     def start_motors(self, left_speed, right_speed):
         """Start the motors, if not already started, each with the specified speed."""
@@ -182,7 +189,7 @@ class Robot:
         elif self.right_color == color_to_follow:
             self.turn_in_degrees(CONSTANTS["TURN_YELLOW_DEGREES"])
         else:
-            self.drivebase.drive(CONSTANTS["MOVE_SPEED"], 0)
+            self.move_forward(10, wait=False)
 
     def turn_and_detect_ultrasonic(self, degrees):
         "Turn the number of degrees, and meanwhile, find the lowest ultrasonic and return the lowest ultrasonic."
@@ -281,18 +288,25 @@ class Robot:
             return # Exit update early if obstacle detected
 
         # Shortcut / Yellow
-        elif ALLOW_YELLOW and (self.left_color == Color.YELLOW or self.right_color == Color.YELLOW): # CURRENTLY DISABLED
+        elif ALLOW_YELLOW and (self.left_color == Color.YELLOW or self.right_color == Color.YELLOW):
             self.robot_state = "yellow line"
-            if self.robot_state != self.previous_state and self.iteration_count > self.shortcut_cooldown_end:
-                self.shortcut_cooldown_end = self.iteration_count + 1000
-
+            if not self.shortcut_information["is following shortcut"]:
                 if self.left_color == Color.YELLOW:
                     self.turn_in_degrees(-90)
+
+                    if self.shortcut_information["first turned"] == None:
+                        self.shortcut_information["first turned"] = "left"
+
                 if self.right_color == Color.YELLOW:
                     self.turn_in_degrees(90)
+
+                    if self.shortcut_information["first turned"] == None:
+                        self.shortcut_information["first turned"] = "right"
+            
+            self.shortcut_information["is following shortcut"] = True
         
         # Line
-        elif self.iteration_count > self.shortcut_cooldown_end and \
+        elif not self.shortcut_information["is following shortcut"] and \
             self.left_color in [Color.WHITE, Color.BLACK, Color.GRAY] and \
             self.right_color in [Color.WHITE, Color.BLACK, Color.GRAY] and \
             not (self.left_color == self.right_color and self.left_color == Color.GRAY): # Both not gray
@@ -309,6 +323,21 @@ class Robot:
             self.robot_state = "line"
             # self.robot_state = "stop"
 
+        # Stopping shortcut
+        if self.left_color == Color.BLACK:
+            self.shortcut_information["left seen black since"] = True
+        if self.right_color == Color.BLACK:
+            self.shortcut_information["right seen black since"] = True
+
+        if self.shortcut_information["left seen black since"] and self.shortcut_information["right seen black since"]:
+            if self.shortcut_information["first turned"] == "left":
+                self.turn_in_degrees(90) # Turn right if it turned left for the shortcut
+            else:
+                self.turn_in_degrees(-90) # Turn left if it turned right for the shortcut
+
+            self.robot_state = "line" # Go back to normal line following
+            self.shortcut_information = self.default_shortcut_information.copy()
+
     def move(self):
         """Move the robot based on its current state."""
         # Gray
@@ -320,7 +349,7 @@ class Robot:
             self.avoid_obstacle()
 
         # ShortcutYellow
-        elif self.robot_state == "yellow line":
+        elif self.shortcut_information["is following shortcut"]:
             self.follow_color()
         
         # Line
