@@ -17,9 +17,9 @@ CONSTANTS = {
     "OBSTACLE_MOVE_SPEED": 300,
     "MOVE_SPEED": 130,
     "ULTRASONIC_THRESHOLD": 70,
-    "TURN_GREEN_DEGREES": 70,
+    "TURN_GREEN_DEGREES": 45,
     "TURN_YELLOW_DEGREES": 20,
-    "CURVE_RADIUS_GREEN": 80,
+    "CURVE_RADIUS_GREEN": 85,
     "CURVE_RADIUS_OBSTACLE": 130,
     "OBSTACLE_TURN_DEGREES": 140,
     "OBSTACLE_INITIAL_TURN_DEGREES": 90,
@@ -89,15 +89,15 @@ class Robot:
         """Turn in degrees. Using a curve for line following."""
         self.drivebase.curve(CONSTANTS["CURVE_RADIUS_LINE_FOLLOW"], degrees, Stop.COAST, wait)
 
-    def sharp_turn_in_degrees(self, degrees):
+    def sharp_turn_in_degrees(self, degrees, wait=True):
         """Perform a sharp turn in degrees."""
-        self.drivebase.turn(degrees)
+        self.drivebase.turn(degrees, wait=wait)
 
-    def move_forward(self, distance, speed=None, wait=False):
+    def move_forward(self, distance, speed=None, wait=True):
         """Move forward in mm."""
         if speed is not None:
             self.set_speed(speed)
-        self.drivebase.straight(distance, wait)
+        self.drivebase.straight(distance, wait=wait)
 
     def start_motors(self, left_speed, right_speed):
         """Start the motors, if not already started, each with the specified speed."""
@@ -111,9 +111,9 @@ class Robot:
         self.left_drive.stop()
         self.right_drive.stop()
 
-    def rotate_arm(self, degrees, stop_method=Stop.BRAKE):
+    def rotate_arm(self, degrees, stop_method=Stop.BRAKE, wait=False):
         """Rotate the arm's motor based on degrees."""
-        self.arm_motor.run_angle(CONSTANTS["ARM_MOVE_SPEED"], degrees, stop_method, False)
+        self.arm_motor.run_angle(CONSTANTS["ARM_MOVE_SPEED"], degrees, stop_method, wait=wait)
 
     def set_speed(self, speed):
         """Set the speed of the robot in drivebase settings."""
@@ -123,7 +123,7 @@ class Robot:
 
     def information_to_color(self, information):
         """Convert color sensor information to a color."""
-        if information["reflection"] > 97: # Probably needs to be better
+        if information["reflection"] > 99: # Probably needs to be better
             return Color.GRAY
         elif information["color"] == Color.WHITE:
             return Color.WHITE
@@ -180,7 +180,7 @@ class Robot:
         while not self.drivebase.done(): # To check if both are black
             self.get_colors()
             if self.left_color == Color.BLACK and self.right_color == Color.BLACK:
-                self.stop_motors()
+                self.start_motors(120, 120) # Slow down a lot
                 self.black_counter += 1
     
     def follow_color(self, color_to_follow=Color.YELLOW):
@@ -197,7 +197,7 @@ class Robot:
         lowest_ultrasonic_angle = 0
 
         self.drivebase.reset()
-        self.sharp_turn_in_degrees(degrees)
+        self.sharp_turn_in_degrees(degrees, wait=False)
 
         while not self.drivebase.done():
             new_ultrasonic = self.ultrasonic_sensor.distance()
@@ -205,45 +205,48 @@ class Robot:
             if new_ultrasonic < lowest_ultrasonic:
                 lowest_ultrasonic = new_ultrasonic
                 lowest_ultrasonic_angle = self.drivebase.angle()
+            
+            print(lowest_ultrasonic, lowest_ultrasonic_angle, self.drivebase.angle())
         
         return lowest_ultrasonic, lowest_ultrasonic_angle
     
     def gray_ending(self):
-        self.drivebase.settings(
+        self.drivebase.settings( # Slow down
             straight_speed=80,
             straight_acceleration=450,
-            turn_rate=400,
+            turn_rate=140,
             turn_acceleration=1600
         )
 
-        self.move_forward(290)
-        self.move_forward(-20)
+        self.rotate_arm(-90) # Arm up
 
-        self.stop_motors()
+        self.move_forward(290) # Go to middle
+        self.move_forward(-20) # Go back just in case hit the can
+        self.hub.imu.reset_heading(0)
 
-        lowest_ultrasonic, lowest_ultrasonic_angle = self.turn_and_detect_ultrasonic(360)
+        self.stop_motors() # Stop
+
+        lowest_ultrasonic, lowest_ultrasonic_angle = self.turn_and_detect_ultrasonic(360) # Turn 360 degrees, find the lowest ultrasonic and angle
 
         self.drivebase.reset()
-        self.sharp_turn_in_degrees(lowest_ultrasonic_angle)
-        self.move_forward(lowest_ultrasonic - 20)
-        self.rotate_arm(180)
+        self.sharp_turn_in_degrees(lowest_ultrasonic_angle) # Turn to the lowest ultrasonic
+        self.move_forward(lowest_ultrasonic - 20) # Go to the lowest ultrasonic
+        self.rotate_arm(-85, wait=True) # Arm down, capture the can
 
-        self.sharp_turn_in_degrees(180)
-        self.move_forward(lowest_ultrasonic - 20)
+        # self.sharp_turn_in_degrees(180)
+        self.move_forward(-(lowest_ultrasonic - 20)) # Go back to middle
+        self.sharp_turn_in_degrees(-self.hub.imu.heading()) # Turn back, and face exit
+        self.move_forward(270) # Go to exit
 
-        self.sharp_turn_in_degrees(-lowest_ultrasonic_angle)
-        
-        self.move_forward(270)
+        self.sharp_turn_in_degrees(60) # Turn 45 degrees 
+        self.move_forward(100) # Go forward a bit so the can is not on the path
+        self.rotate_arm(180) # Arm up, release the can
+        self.move_forward(-100) # Go back
+        self.sharp_turn_in_degrees(-60) # Turn back
 
-        # Back at the gray here
+        self.settings_default() # Reset speed and settings
 
-        self.sharp_turn_in_degrees(45)
-        self.rotate_arm(-180)
-        self.sharp_turn_in_degrees(-45)
-
-        self.settings_default()
-
-        self.move_forward(10)
+        self.move_forward(10) # Hopefully sense the black line again
 
     def avoid_obstacle(self):
         self.stop_motors()
@@ -372,10 +375,11 @@ class Robot:
         """Print debug text."""
         # print(self.robot_state)
         # print(self.left_color_sensor_information, self.left_color)
-        print(self.right_color_sensor_information, self.right_color)
+        # print(self.right_color_sensor_information, self.right_color)
         # print(self.left_color, self.right_color)
         # print(self.iteration_count)
         # print(self.ultrasonic)
+        pass
 
     def run(self):
         self.battery_display()
