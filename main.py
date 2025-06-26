@@ -229,13 +229,22 @@ class Robot:
         lowest_ultrasonic, lowest_ultrasonic_angle = self.turn_and_detect_ultrasonic(360) # Turn 360 degrees, find the lowest ultrasonic and angle
 
         self.drivebase.reset()
+
+        if lowest_ultrasonic_angle > 180:
+            lowest_ultrasonic_angle -= 360 # Make sure the angle is between -180 and 180
+
         self.sharp_turn_in_degrees(lowest_ultrasonic_angle) # Turn to the lowest ultrasonic
         self.move_forward(lowest_ultrasonic - 20) # Go to the lowest ultrasonic
-        self.rotate_arm(-85, wait=True) # Arm down, capture the can
+        self.rotate_arm(-90, stop_method=Stop.COAST, wait=True) # Arm down, capture the can
 
         # self.sharp_turn_in_degrees(180)
         self.move_forward(-(lowest_ultrasonic - 20)) # Go back to middle
-        self.sharp_turn_in_degrees(-self.hub.imu.heading()) # Turn back, and face exit
+
+        return_to_exit_angle = -self.hub.imu.heading() + 180
+        if return_to_exit_angle > 180:
+            return_to_exit_angle -= 360
+
+        self.sharp_turn_in_degrees(return_to_exit_angle) # Turn back, and face exit
         self.move_forward(270) # Go to exit
 
         self.sharp_turn_in_degrees(60) # Turn 45 degrees 
