@@ -12,12 +12,12 @@ CONSTANTS = {
     "ARM_MOVE_SPEED": 500,
     "DEFAULT_SPEED": 130,
     "DEFAULT_ACCELERATION": 600,
-    "DEFAULT_TURN_RATE": 600,
+    "DEFAULT_TURN_RATE": 250,
     "DEFAULT_TURN_ACCELERATION": 2000,
     "OBSTACLE_MOVE_SPEED": 300,
     "MOVE_SPEED": 130,
     "ULTRASONIC_THRESHOLD": 70,
-    "BLACK_WHEEL_SPEED": 20,
+    "BLACK_WHEEL_SPEED": 30,
     "TURN_GREEN_DEGREES": 50,
     "TURN_YELLOW_DEGREES": 20,
     "CURVE_RADIUS_GREEN": 85,
@@ -26,7 +26,7 @@ CONSTANTS = {
     "OBSTACLE_INITIAL_TURN_DEGREES": 90,
     "OBSTACLE_FINAL_TURN_DEGREES": 45,
     "CURVE_RADIUS_LINE_FOLLOW": 4,
-    "MAX_TURN_RATE": 400,
+    "MAX_TURN_RATE": 200,
     "BLACK_COUNTER_THRESHOLD": 1000,
 }
 
@@ -178,7 +178,7 @@ class Robot:
         else:
             reflection_difference = self.right_color_sensor_information["reflection"] - self.left_color_sensor_information["reflection"]
         
-        turn_rate = max(min(3.2 * reflection_difference, CONSTANTS["MAX_TURN_RATE"]), -CONSTANTS["MAX_TURN_RATE"])
+        turn_rate = max(min(2.4 * reflection_difference, CONSTANTS["MAX_TURN_RATE"]), -CONSTANTS["MAX_TURN_RATE"])
         self.drivebase.drive(CONSTANTS["MOVE_SPEED"], turn_rate)
 
         while not self.drivebase.done(): # To check if both are black
