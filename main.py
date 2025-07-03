@@ -3,7 +3,7 @@ from pybricks.hubs import PrimeHub
 from pybricks.robotics import DriveBase
 from pybricks.parameters import Port, Color, Axis, Direction, Button, Stop
 
-ALLOW_YELLOW = False    
+ALLOW_YELLOW = False
 
 # --- CONSTANTS ---
 CONSTANTS = {
@@ -17,7 +17,8 @@ CONSTANTS = {
     "OBSTACLE_MOVE_SPEED": 300,
     "MOVE_SPEED": 130,
     "ULTRASONIC_THRESHOLD": 70,
-    "TURN_GREEN_DEGREES": 45,
+    "BLACK_WHEEL_SPEED": 20,
+    "TURN_GREEN_DEGREES": 50,
     "TURN_YELLOW_DEGREES": 20,
     "CURVE_RADIUS_GREEN": 85,
     "CURVE_RADIUS_OBSTACLE": 130,
@@ -25,7 +26,7 @@ CONSTANTS = {
     "OBSTACLE_INITIAL_TURN_DEGREES": 90,
     "OBSTACLE_FINAL_TURN_DEGREES": 45,
     "CURVE_RADIUS_LINE_FOLLOW": 4,
-    "MAX_TURN_RATE": 500,
+    "MAX_TURN_RATE": 400,
     "BLACK_COUNTER_THRESHOLD": 1000,
 }
 
@@ -159,6 +160,9 @@ class Robot:
         self.left_color = self.information_to_color(self.left_color_sensor_information)
         self.right_color = self.information_to_color(self.right_color_sensor_information)
 
+    def both_black_slow(self):
+        self.start_motors(CONSTANTS["BLACK_WHEEL_SPEED"], CONSTANTS["BLACK_WHEEL_SPEED"]) # Slow down a lot
+    
     def turn_green(self, direction):
         """When there is a green on the left or the right, react to it by doing a larger turn left or right."""
         if direction == "left":
@@ -174,13 +178,13 @@ class Robot:
         else:
             reflection_difference = self.right_color_sensor_information["reflection"] - self.left_color_sensor_information["reflection"]
         
-        turn_rate = max(min(3.3 * reflection_difference, CONSTANTS["MAX_TURN_RATE"]), -CONSTANTS["MAX_TURN_RATE"])
+        turn_rate = max(min(3.2 * reflection_difference, CONSTANTS["MAX_TURN_RATE"]), -CONSTANTS["MAX_TURN_RATE"])
         self.drivebase.drive(CONSTANTS["MOVE_SPEED"], turn_rate)
 
         while not self.drivebase.done(): # To check if both are black
             self.get_colors()
             if self.left_color == Color.BLACK and self.right_color == Color.BLACK:
-                self.start_motors(120, 120) # Slow down a lot
+                self.both_black_slow()
                 self.black_counter += 1
     
     def follow_color(self, color_to_follow=Color.YELLOW):
@@ -286,6 +290,7 @@ class Robot:
         
         if self.left_color == Color.BLACK and self.right_color == Color.BLACK:
             self.black_counter += 1
+            self.both_black_slow()
         else:
             self.black_counter = 0
         
