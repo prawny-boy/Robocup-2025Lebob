@@ -16,15 +16,17 @@ CONSTANTS = {
     "DEFAULT_TURN_ACCELERATION": 1600,
     "OBSTACLE_MOVE_SPEED": 300,
     "MOVE_SPEED": 170,
-    "ULTRASONIC_THRESHOLD": 70,
+    "ULTRASONIC_THRESHOLD": 50,
     "BLACK_WHEEL_SPEED": 30,
     "TURN_GREEN_DEGREES": 50,
+    "BACK_AFTER_GREEN_TURN_DISTANCE": 6,
     "TURN_YELLOW_DEGREES": 20,
-    "CURVE_RADIUS_GREEN": 87,
-    "CURVE_RADIUS_OBSTACLE": 150,
+    "CURVE_RADIUS_GREEN": 78,
+    "CURVE_RADIUS_OBSTACLE": 130,
     "OBSTACLE_TURN_DEGREES": 175,
     "OBSTACLE_INITIAL_TURN_DEGREES": 90,
     "OBSTACLE_FINAL_TURN_DEGREES": 70,
+    "OBSTACLE_ARM_RETURN_DELAY": 3000,
     "CURVE_RADIUS_LINE_FOLLOW": 4,
     "MAX_TURN_RATE": 150,
     "BLACK_COUNTER_THRESHOLD": 1000,
@@ -65,6 +67,7 @@ class Robot:
         self.iteration_count = 0 # Initialize the iteration counter
         self.black_counter = 0
         self.on_inverted = False
+        self.move_arm_back_after_obstacle_time = False
 
         self.shortcut_information = {
             "is following shortcut": False, # If the robot is following a shortcut
@@ -187,12 +190,17 @@ class Robot:
         
         self.drivebase.curve(CONSTANTS["CURVE_RADIUS_GREEN"], degrees, Stop.COAST, True)
 
+        stop = False
         while not self.drivebase.done():
             self.get_colors()
             if self.left_color == Color.GREEN and self.right_color == Color.GREEN:
                 self.drivebase.stop()
                 self.green_spill_ending()
+                stop = True
                 break
+        
+        if not stop:
+            self.move_forward(-CONSTANTS["BACK_AFTER_GREEN_TURN_DISTANCE"])
 
     def follow_line(self):
         if not self.on_inverted:
@@ -236,6 +244,12 @@ class Robot:
         return lowest_ultrasonic, lowest_ultrasonic_angle
     
     def green_spill_ending(self):
+        self.move_forward(10)
+        self.get_colors()
+        if self.left_color != Color.GREEN or self.right_color != Color.GREEN:
+            self.move_forward(-10)
+            return
+
         self.drivebase.settings( # Slow down
             straight_speed=80,
             straight_acceleration=450,
@@ -245,7 +259,7 @@ class Robot:
 
         self.rotate_arm(-86, stop_method=Stop.HOLD) # Arm up
 
-        self.move_forward(290) # Go to middle
+        self.move_forward(280) # Go to middle - 10 (because already moved forward 10)
         self.move_forward(-20) # Go back just in case hit the can
         # self.hub.imu.reset_heading(0)
 
@@ -288,7 +302,6 @@ class Robot:
         self.stop_motors()
         self.rotate_arm(-90)
         self.sharp_turn_in_degrees(CONSTANTS["OBSTACLE_INITIAL_TURN_DEGREES"])
-        self.set_speed(CONSTANTS["OBSTACLE_MOVE_SPEED"])
         self.drivebase.curve(CONSTANTS["CURVE_RADIUS_OBSTACLE"], -CONSTANTS["OBSTACLE_TURN_DEGREES"], Stop.BRAKE, True)
         self.start_motors(CONSTANTS["OBSTACLE_MOVE_SPEED"], CONSTANTS["OBSTACLE_MOVE_SPEED"])
 
@@ -297,8 +310,7 @@ class Robot:
             self.get_colors()
         self.turn_in_degrees(CONSTANTS["OBSTACLE_FINAL_TURN_DEGREES"])
         self.robot_state = "straight" # Reset state after handling obstacle
-        self.rotate_arm(90)
-        self.set_speed(CONSTANTS["DEFAULT_SPEED"])
+        self.move_arm_back_after_obstacle_time = self.iteration_count + CONSTANTS["OBSTACLE_ARM_RETURN_DELAY"]
     
     def update(self):
         """Update the state of the robot."""
@@ -306,6 +318,11 @@ class Robot:
         self.ultrasonic = self.ultrasonic_sensor.distance()
 
         self.previous_state = self.robot_state
+
+        if self.move_arm_back_after_obstacle_time != False:
+            if self.iteration_count > self.move_arm_back_after_obstacle_time:
+                self.move_arm_back_after_obstacle_time = False
+                self.rotate_arm(90, stop_method=Stop.COAST)
 
         if (self.left_color == Color.GRAY and self.right_color == Color.GRAY) or (self.left_color == Color.GREEN and self.right_color == Color.GREEN):
             self.robot_state = "gray"
