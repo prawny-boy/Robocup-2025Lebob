@@ -38,7 +38,7 @@ CONSTANTS = {
     "LINE_KD": 18.0,
     "LINE_MIN_SPEED": 80,
     "LINE_MAX_TURN_RATE": 320,
-    "CORNER_ERR_THRESHOLD": 25,     # reflectance delta that indicates a sharp corner
+    "CORNER_ERR_THRESHOLD": 13,     # reflectance delta that indicates a sharp corner
     # Can scanning/approach tuning
     "CAN_DEBUG_PRINT": False,           # disable debug printing in can routines
     "CAN_SWEEP_TURN_RATE": 120,        # deg/s used for the initial 360° can sweep
