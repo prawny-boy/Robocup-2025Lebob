@@ -2,7 +2,9 @@ from pybricks.pupdevices import Motor, ColorSensor, UltrasonicSensor
 from pybricks.hubs import PrimeHub
 from pybricks.robotics import DriveBase
 from pybricks.parameters import Port, Color, Axis, Direction, Button, Stop
+from pybricks.tools import StopWatch, wait
 
+# Enable/disable optional yellow-line shortcut behavior
 ALLOW_YELLOW = False
 
 # --- CONSTANTS ---
@@ -16,7 +18,8 @@ CONSTANTS = {
     "DEFAULT_TURN_ACCELERATION": 1600,
     "OBSTACLE_MOVE_SPEED": 300,
     "MOVE_SPEED": 170,
-    "ULTRASONIC_THRESHOLD": 50,
+    "ULTRASONIC_THRESHOLD": 50,         # obstacle trigger (mm)
+    "CAN_DETECT_MAX_MM": 600,           # legacy; see CAN_MAX_DISTANCE_MM
     "BLACK_WHEEL_SPEED": 30,
     "TURN_GREEN_DEGREES": 50,
     "BACK_AFTER_GREEN_TURN_DISTANCE": 6,
@@ -30,8 +33,51 @@ CONSTANTS = {
     "CURVE_RADIUS_LINE_FOLLOW": 4,
     "MAX_TURN_RATE": 150,
     "BLACK_COUNTER_THRESHOLD": 1000,
-    "TURNING_WITH_WEIGHT_CORRECITON_MULTIPLIER": 1.03
+    "TURNING_WITH_WEIGHT_CORRECITON_MULTIPLIER": 1.03,
+    # Timeout (ms) to avoid getting stuck while leaving white during obstacle bypass
+    "OBSTACLE_WHITE_TIMEOUT_MS": 2500,
+    # Line follow tuning (PD + safety)
+    "LINE_KP": 3.2,
+    "LINE_KD": 18.0,
+    "LINE_MIN_SPEED": 80,
+    "LINE_MAX_TURN_RATE": 320,
+    "CORNER_ERR_THRESHOLD": 25,     # reflectance delta that indicates a sharp corner
+    "CORNER_PIVOT_DEG": 14,          # quick pivot to catch 90° turns
+    "CORNER_CONFIRM_CYCLES": 2,
+    # Can scanning/approach tuning
+    "CAN_DEBUG_PRINT": True,            # print ultrasonic during can routines for troubleshooting
+    "CAN_SWEEP_TURN_RATE": 120,        # deg/s used for the initial 360° can sweep
+    "CAN_SWEEP_TURN_RATE_SLOW": 60,    # deg/s used after two failed 360 sweeps
+    "CAN_MAX_DISTANCE_MM": 350,         # maximum valid can distance for detection/approach
+    "CAN_SCAN_MAX_MM": 350,             # default scan threshold (<= this is "seen")
+    "CAN_FIRST_HIT_MAX_MM": 550,        # permissive threshold for first detection during 360
+    "CAN_EDGE_MARGIN_MM": 120,          # margin above first-hit distance to keep the object in sweeps
+    "CAN_IGNORE_ABOVE_MM": 1800,        # treat readings above this as no target (environmental)
+    "CAN_MIN_VALID_MM": 60,             # ignore too-close returns (sensor near-field)
+    "CAN_US_MEDIAN_SAMPLES": 3,         # median filter samples for ultrasonic in can logic
+    "CAN_CREEP_STEP_MM": 60,            # step size when creeping forward to find can
+    "CAN_CREEP_MAX_STEPS": 6,           # max creep steps before giving up
+    # Micro-oscillation scan tuning
+    "CAN_OSC_AMP_DEG": 12,              # oscillation amplitude (+/- degrees)
+    "CAN_OSC_PASSES": 3,                # number of back-and-forth passes
+    "CAN_OSC_TURN_RATE": 60,            # deg/s during oscillation
+    "CAN_OSC_CENTER_STEP_DEG": 30,      # center advance step to cover full 360
+    "CAN_SEGMENT_MIN_POINTS": 4,
+    "CAN_REFINE_SWEEP_DEG": 12,
+    # Push off spill + exit spill tuning
+    "CAN_PUSH_STEP_MM": 20,
+    "CAN_PUSH_CONFIRM": 4,
+    "CAN_PUSH_MAX_MM": 500,
+    "CAN_RELEASE_BACK_MM": 80,
+    "SPILL_EXIT_STEP_MM": 20,
+    "SPILL_EXIT_CONFIRM": 3,
+    "SPILL_EXIT_MAX_MM": 400,
 }
+
+# Preferred corrected key; keep legacy key for backward compatibility
+CONSTANTS["TURNING_WITH_WEIGHT_CORRECTION_MULTIPLIER"] = CONSTANTS.get(
+    "TURNING_WITH_WEIGHT_CORRECITON_MULTIPLIER", 1.03
+)
 
 ports = {
     "left_drive": Port.E,
@@ -45,6 +91,7 @@ ports = {
 class Robot:
     def __init__(self):
         self.hub = PrimeHub(Axis.Z, Axis.X)
+        self.clock = StopWatch()
         self.left_drive = Motor(ports["left_drive"], positive_direction=Direction.COUNTERCLOCKWISE)
         self.right_drive = Motor(ports["right_drive"])
 
@@ -63,19 +110,54 @@ class Robot:
         self.drivebase.use_gyro(False)
         self.settings_default()
 
-        self.robot_state = "obstacle" # Initial state
-        self.iteration_count = 0 # Initialize the iteration counter
+        self.robot_state = "obstacle"  # Initial state
+        self.iteration_count = 0
         self.black_counter = 0
         self.on_inverted = False
         self.move_arm_back_after_obstacle_time = False
+        self.debug_enabled = False  # toggle prints on hub
+        self.prev_error = 0
+        self.corner_hold = 0
+        self.line_pivoting = False
 
         self.shortcut_information = {
-            "is following shortcut": False, # If the robot is following a shortcut
-            "first turned": None, # Which direction the robot turned first due to a shortcut
-            "left seen black since": False, # If the left sensor has seen black since the last shortcut
-            "right seen black since": False # If the right sensor has seen black since the last shortcut
+            "is following shortcut": False,
+            "first turned": None,
+            "left seen black since": False,
+            "right seen black since": False
         }
         self.default_shortcut_information = self.shortcut_information.copy()
+
+        # Can routine path recording (to return exactly to entry point)
+        self.can_recording = False
+        self.can_path = []  # list of (action, value), action in {"move", "turn"}
+        # Can sweep behavior: after two failed 360 sweeps, switch to slow sweeps permanently
+        self.can_sweep_slow_mode = False
+
+    # --- helpers ---
+    def read_ultra_mm(self):
+        """Raw ultrasonic reading in mm; returns 9999 if no valid target."""
+        d = self.ultrasonic_sensor.distance()
+        if d is None:
+            return 9999
+        return d
+
+    def read_ultra_mm_can(self):
+        """Ultrasonic read with simple median filter and bounds for can logic."""
+        samples = []
+        for _ in range(CONSTANTS.get("CAN_US_MEDIAN_SAMPLES", 3)):
+            d = self.ultrasonic_sensor.distance()
+            if d is None:
+                d = 9999
+            samples.append(d)
+            wait(5)
+        samples.sort()
+        m = samples[len(samples)//2]
+        if m < CONSTANTS.get("CAN_MIN_VALID_MM", 60):
+            return 9999
+        if m > CONSTANTS.get("CAN_IGNORE_ABOVE_MM", 1800):
+            return 9999
+        return m
 
     def settings_default(self):
         self.drivebase.settings(
@@ -85,50 +167,81 @@ class Robot:
             turn_acceleration=CONSTANTS["DEFAULT_TURN_ACCELERATION"]
         )
     
+    def log(self, *msg):
+        if self.debug_enabled:
+            print(*msg)
+
+    def can_log(self, *msg):
+        if CONSTANTS.get("CAN_DEBUG_PRINT", False):
+            print(*msg)
+
     def battery_display(self):
         battery_voltage = self.hub.battery.voltage()
-
-        print("Battery:", battery_voltage)
+        self.log("Battery:", battery_voltage)
     
     def turn_in_degrees(self, degrees, wait=False):
-        """Turn in degrees. Using a curve for line following."""
+        """Turn in degrees with curve."""
         self.drivebase.curve(CONSTANTS["CURVE_RADIUS_LINE_FOLLOW"], degrees, Stop.COAST, wait)
 
     def sharp_turn_in_degrees(self, degrees, wait=True):
-        """Perform a sharp turn in degrees."""
+        """Sharp turn."""
         self.drivebase.turn(degrees, wait=wait)
 
     def move_forward(self, distance, speed=None, wait=True):
-        """Move forward in mm."""
+        """Move straight in mm."""
         if speed is not None:
             self.set_speed(speed)
         self.drivebase.straight(distance, wait=wait)
 
+    # --- Recording helpers for can routine ---
+    def can_start_recording(self):
+        self.can_path = []
+        self.can_recording = True
+
+    def can_cancel_recording(self):
+        self.can_path = []
+        self.can_recording = False
+
+    def can_move_forward(self, distance, speed=None, wait=True):
+        if self.can_recording:
+            self.can_path.append(("move", distance))
+        self.move_forward(distance, speed=speed, wait=wait)
+
+    def can_turn(self, degrees, wait=True):
+        if self.can_recording:
+            self.can_path.append(("turn", degrees))
+        self.sharp_turn_in_degrees(degrees, wait=wait)
+
+    def can_backtrack(self):
+        """Reverse the recorded path exactly (invert order and actions)."""
+        for action, value in reversed(self.can_path):
+            if action == "move":
+                self.move_forward(-value)
+            elif action == "turn":
+                self.sharp_turn_in_degrees(-value)
+        self.can_cancel_recording()
+
     def start_motors(self, left_speed, right_speed):
-        """Start the motors, if not already started, each with the specified speed."""
-        if not self.left_drive.speed() == left_speed:
+        """Run motors at given speeds."""
+        if self.left_drive.speed() != left_speed:
             self.left_drive.run(left_speed)
-        if not self.right_drive.speed() == right_speed:
+        if self.right_drive.speed() != right_speed:
             self.right_drive.run(right_speed)
 
     def stop_motors(self):
-        """Stop the motors."""
         self.left_drive.stop()
         self.right_drive.stop()
 
     def rotate_arm(self, degrees, stop_method=Stop.BRAKE, wait=False):
-        """Rotate the arm's motor based on degrees."""
         self.arm_motor.run_angle(CONSTANTS["ARM_MOVE_SPEED"], degrees, stop_method, wait=wait)
 
     def set_speed(self, speed):
-        """Set the speed of the robot in drivebase settings."""
         if speed == 0:
             speed = CONSTANTS["DEFAULT_SPEED"]
         self.drivebase.settings(straight_speed=speed)
 
     def information_to_color(self, information):
-        """Convert color sensor information to a color."""
-        if information["reflection"] > 99: # Probably needs to be better
+        if information["reflection"] > 99:
             return Color.GRAY
         elif information["color"] == Color.WHITE:
             return Color.WHITE
@@ -140,16 +253,14 @@ class Robot:
             return Color.BLUE
         elif information["color"] == Color.RED and information["hsv"].s > 85:
             return Color.RED
-        elif information["color"] == Color.RED: # information["hsv"].s <= 85
+        elif information["color"] == Color.RED:
             return Color.ORANGE
         elif information["hsv"].s < 25 and information["reflection"] < 30:
             return Color.BLACK
         else:
             return Color.NONE
-            # Could try return Color.BLACK
 
     def get_colors(self):
-        """Get the reflection, color, and HSV values of the left and right color sensors to be used for color detection."""
         self.left_color_sensor_information = {
             "reflection": self.color_sensor_left.reflection(),
             "color": self.color_sensor_left.color(),
@@ -165,12 +276,9 @@ class Robot:
         self.right_color = self.information_to_color(self.right_color_sensor_information)
 
     def both_black_slow(self):
-        self.start_motors(CONSTANTS["BLACK_WHEEL_SPEED"], CONSTANTS["BLACK_WHEEL_SPEED"]) # Slow down a lot
+        self.start_motors(CONSTANTS["BLACK_WHEEL_SPEED"], CONSTANTS["BLACK_WHEEL_SPEED"])
     
     def turn_green(self, direction):
-        """When there is a green on the left or the right, react to it by doing a larger turn left or right."""
-        
-        # Check if it actually green and not an error
         self.move_forward(10)
         self.get_colors()
         new_left_color = self.information_to_color(self.left_color_sensor_information)
@@ -188,7 +296,8 @@ class Robot:
         else:
             degrees = CONSTANTS["TURN_GREEN_DEGREES"]
         
-        self.drivebase.curve(CONSTANTS["CURVE_RADIUS_GREEN"], degrees, Stop.COAST, True)
+        # Turn without waiting so we can detect both sensors green and stop early
+        self.drivebase.curve(CONSTANTS["CURVE_RADIUS_GREEN"], degrees, Stop.COAST, False)
 
         stop = False
         while not self.drivebase.done():
@@ -203,19 +312,31 @@ class Robot:
             self.move_forward(-CONSTANTS["BACK_AFTER_GREEN_TURN_DISTANCE"])
 
     def follow_line(self):
-        if not self.on_inverted:
-            reflection_difference = self.left_color_sensor_information["reflection"] - self.right_color_sensor_information["reflection"]
-        else:
-            reflection_difference = self.right_color_sensor_information["reflection"] - self.left_color_sensor_information["reflection"]
-        
-        turn_rate = max(min(3.5 * reflection_difference, CONSTANTS["MAX_TURN_RATE"]), -CONSTANTS["MAX_TURN_RATE"])
-        self.drivebase.drive(CONSTANTS["MOVE_SPEED"], turn_rate)
+        # Simple PD line follow with dynamic slowdown; no blocking, no pivots
+        left_ref = self.left_color_sensor_information["reflection"]
+        right_ref = self.right_color_sensor_information["reflection"]
 
-        while not self.drivebase.done(): # To check if both are black
-            self.get_colors()
-            if self.left_color == Color.BLACK and self.right_color == Color.BLACK:
-                self.both_black_slow()
-                self.black_counter += 1
+        error = (left_ref - right_ref) if not self.on_inverted else (right_ref - left_ref)
+
+        kp = CONSTANTS["LINE_KP"]
+        kd = CONSTANTS["LINE_KD"]
+        d_err = error - self.prev_error
+        self.prev_error = error
+        turn_rate = kp * error + kd * d_err
+
+        # Clamp turn rate
+        max_turn = CONSTANTS["LINE_MAX_TURN_RATE"]
+        if turn_rate > max_turn:
+            turn_rate = max_turn
+        elif turn_rate < -max_turn:
+            turn_rate = -max_turn
+
+        # Slow down slightly with larger error to make tight corners
+        err_scale = min(1.0, abs(error) / max(1, CONSTANTS["CORNER_ERR_THRESHOLD"]))
+        base_speed = CONSTANTS["MOVE_SPEED"]
+        speed = max(CONSTANTS["LINE_MIN_SPEED"], int(base_speed * (1 - 0.4 * err_scale)))
+
+        self.drivebase.drive(speed, turn_rate)
     
     def follow_color(self, color_to_follow=Color.YELLOW):
         if self.left_color == color_to_follow:
@@ -226,77 +347,460 @@ class Robot:
             self.move_forward(10, wait=False)
 
     def turn_and_detect_ultrasonic(self, degrees=360):
-        "Turn the number of degrees, and meanwhile, find the lowest ultrasonic and return the lowest ultrasonic."
-        lowest_ultrasonic = 2000
+        """Single 360 scan. Returns (min_dist, at_angle)."""
+        lowest_ultrasonic = 9999
         lowest_ultrasonic_angle = 0
-
         self.drivebase.reset()
+        # Use fast or slow sweep rate based on can_sweep_slow_mode
+        try:
+            ss, sa, prev_tr, ta = self.drivebase.settings()
+        except Exception:
+            prev_tr = None
+        sweep_rate = (
+            CONSTANTS["CAN_SWEEP_TURN_RATE_SLOW"]
+            if getattr(self, "can_sweep_slow_mode", False)
+            else CONSTANTS["CAN_SWEEP_TURN_RATE"]
+        )
+        self.drivebase.settings(turn_rate=sweep_rate)
         self.sharp_turn_in_degrees(degrees, wait=False)
-
         while not self.drivebase.done():
-            new_ultrasonic = self.ultrasonic_sensor.distance()
-
-            if new_ultrasonic < lowest_ultrasonic:
-                lowest_ultrasonic = new_ultrasonic
+            new_ultra = self.read_ultra_mm_can()
+            self.can_log("CAN Fallback 360 d=", new_ultra, "a=", self.drivebase.angle())
+            if new_ultra < lowest_ultrasonic:
+                lowest_ultrasonic = new_ultra
                 lowest_ultrasonic_angle = self.drivebase.angle()
-
-            print(new_ultrasonic, self.drivebase.angle())
+        # Restore previous turn rate
+        if prev_tr is not None:
+            self.drivebase.settings(turn_rate=prev_tr)
         return lowest_ultrasonic, lowest_ultrasonic_angle
-    
+
+    def sweep_find_can_midpoint(self, sweep_deg=160, threshold=None, confirm=3):
+        """Sweep left→right. Find first/last angles where can is seen (<= threshold).
+        Returns (mid_angle_deg, approach_dist_mm) or (None, None).
+        """
+        if threshold is None:
+            threshold = CONSTANTS["CAN_SCAN_MAX_MM"]
+
+        # Move to left edge and zero angle reference
+        self.sharp_turn_in_degrees(-sweep_deg // 2, wait=True)
+        self.drivebase.reset()
+
+        # Sweep to the right and record points (angle, distance)
+        self.sharp_turn_in_degrees(sweep_deg, wait=False)
+        points = []
+        while not self.drivebase.done():
+            d = self.read_ultra_mm()
+            a = self.drivebase.angle()
+            points.append((a, d))
+
+        # Segment contiguous points within threshold; choose segment with closest min distance
+        segments = []
+        cur = []
+        for a, d in points:
+            if d < threshold:
+                cur.append((a, d))
+            else:
+                if len(cur) >= CONSTANTS["CAN_SEGMENT_MIN_POINTS"]:
+                    segments.append(cur)
+                cur = []
+        if len(cur) >= CONSTANTS["CAN_SEGMENT_MIN_POINTS"]:
+            segments.append(cur)
+
+        if not segments:
+            return None, None
+
+        def seg_min(seg):
+            return min(seg, key=lambda t: t[1])
+
+        # Pick the segment whose minimum distance is smallest (closest object)
+        best_seg = min(segments, key=lambda s: seg_min(s)[1])
+        min_a, min_d = seg_min(best_seg)
+
+        # Weighted centroid around local minimum to reduce bias
+        window = [(a, d) for a, d in best_seg if d <= min_d + 40]
+        if window:
+            wsum = 0.0
+            asum = 0.0
+            for a, d in window:
+                w = 1.0 / max(1.0, float(d))
+                wsum += w
+                asum += w * a
+            target_angle = asum / max(1e-6, wsum)
+        else:
+            target_angle = min_a
+
+        return target_angle, min_d
+
+    def find_can_edges_midpoint(self, sweep_deg=160, threshold=None, confirm=3):
+        """360 scan until first detection, then sweep left/right to edges and return midpoint.
+        Returns (mid_angle_deg, min_dist_mm) or (None, None).
+        """
+        if threshold is None:
+            threshold = CONSTANTS["CAN_SCAN_MAX_MM"]
+
+        # 360 to find the first detection point (record actual turned angle)
+        attempts = 0
+        first_hit_angle = None
+        first_hit_distance = 9999
+        min_d = 9999
+        while True:
+            self.drivebase.reset()
+            start_ang = self.drivebase.angle()
+            # Temporarily set a specific sweep turn rate
+            try:
+                ss, sa, prev_tr, ta = self.drivebase.settings()
+            except Exception:
+                prev_tr = None
+            sweep_rate = (
+                CONSTANTS["CAN_SWEEP_TURN_RATE_SLOW"]
+                if self.can_sweep_slow_mode
+                else CONSTANTS["CAN_SWEEP_TURN_RATE"]
+            )
+            self.drivebase.settings(turn_rate=sweep_rate)
+            first_hit_angle = None
+            while self.drivebase.angle() != 0:
+                # ensure reset applied before starting turn
+                break
+            self.can_log("CAN 360 sweep: rate=", sweep_rate)
+            self.sharp_turn_in_degrees(360, wait=False)
+            while not self.drivebase.done():
+                d = self.read_ultra_mm_can()
+                a = self.drivebase.angle()
+                self.can_log("CAN 360 d=", d, "a=", a)
+                if d < min_d:
+                    min_d = d
+                if d <= CONSTANTS["CAN_FIRST_HIT_MAX_MM"] and first_hit_angle is None:
+                    first_hit_angle = a
+                    first_hit_distance = d
+                    break
+            self.drivebase.stop()
+            # Restore previous turn rate if available
+            if prev_tr is not None:
+                self.drivebase.settings(turn_rate=prev_tr)
+            # Record actual turned amount
+            if self.can_recording:
+                self.can_path.append(("turn", self.drivebase.angle() - start_ang))
+
+            if first_hit_angle is not None:
+                self.can_log("CAN 360: first hit at angle=", first_hit_angle, "min_d=", min_d)
+                break
+
+            # Not found this sweep
+            if not self.can_sweep_slow_mode:
+                attempts += 1
+                if attempts < 2:
+                    # Try a second fast sweep
+                    self.can_log("CAN 360: no detection, fast attempt", attempts)
+                    continue
+                # After two failed sweeps, switch to slow mode for all future 360s
+                self.can_sweep_slow_mode = True
+                self.can_log("CAN 360: switching to slow sweep rate")
+                # Perform one immediate slow sweep
+                continue
+            else:
+                # Already slow and still not detected; give up
+                self.can_log("CAN 360: no detection even in slow mode; giving up")
+                return None, None
+
+        # Use current heading as center, sweep left to detect left edge
+        self.drivebase.reset()
+        start_ang = self.drivebase.angle()
+        self.sharp_turn_in_degrees(-(sweep_deg // 2), wait=False)
+        left_edge = None
+        last_seen = None
+        lost = 0
+        edge_threshold = first_hit_distance + CONSTANTS["CAN_EDGE_MARGIN_MM"]
+        while not self.drivebase.done():
+            d = self.read_ultra_mm_can()
+            a = self.drivebase.angle()
+            self.can_log("CAN LEFT d=", d, "a=", a)
+            if d <= edge_threshold:
+                last_seen = a
+                lost = 0
+                if d < min_d:
+                    min_d = d
+            else:
+                lost += 1
+                if lost >= confirm and last_seen is not None:
+                    left_edge = last_seen
+                    break
+        self.drivebase.stop()
+        if self.can_recording:
+            self.can_path.append(("turn", self.drivebase.angle() - start_ang))
+        # Fallback: if we ended the sweep still seeing the can, use last_seen
+        if left_edge is None and last_seen is not None:
+            left_edge = last_seen
+
+        # Sweep right to detect right edge (keep same angle frame as left)
+        start_ang = self.drivebase.angle()
+        self.sharp_turn_in_degrees(sweep_deg, wait=False)
+        right_edge = None
+        last_seen = None
+        lost = 0
+        while not self.drivebase.done():
+            d = self.read_ultra_mm_can()
+            a = self.drivebase.angle()
+            self.can_log("CAN RIGHT d=", d, "a=", a)
+            if d <= edge_threshold:
+                last_seen = a
+                lost = 0
+                if d < min_d:
+                    min_d = d
+            else:
+                lost += 1
+                if lost >= confirm and last_seen is not None:
+                    right_edge = last_seen
+                    break
+        self.drivebase.stop()
+        if self.can_recording:
+            self.can_path.append(("turn", self.drivebase.angle() - start_ang))
+        # Fallback: end-of-sweep still seeing can
+        if right_edge is None and last_seen is not None:
+            right_edge = last_seen
+
+        if left_edge is None or right_edge is None:
+            return None, None
+
+        mid = (left_edge + right_edge) / 2.0
+        return mid, min_d
+
+    def find_can_angle_micro_oscillation(self, amp_deg=None, passes=None):
+        """Oscillate around center heading and return the angle with the minimum filtered distance.
+        Returns (angle_deg, min_dist_mm) or (None, None) if nothing plausible is seen.
+        """
+        if amp_deg is None:
+            amp_deg = CONSTANTS["CAN_OSC_AMP_DEG"]
+        if passes is None:
+            passes = CONSTANTS["CAN_OSC_PASSES"]
+
+        # Save/override turn rate for precise oscillation
+        try:
+            ss, sa, prev_tr, ta = self.drivebase.settings()
+        except Exception:
+            prev_tr = None
+        self.drivebase.settings(turn_rate=CONSTANTS["CAN_OSC_TURN_RATE"])
+
+        self.drivebase.reset()  # center = 0 deg
+        best_d = 9999
+        best_a = 0
+
+        def sample_during_turn(target_abs_angle):
+            nonlocal best_d, best_a
+            # Compute incremental delta to reach absolute angle
+            delta = target_abs_angle - self.drivebase.angle()
+            self.sharp_turn_in_degrees(delta, wait=False)
+            while not self.drivebase.done():
+                d = self.read_ultra_mm_can()
+                a = self.drivebase.angle()
+                self.can_log("CAN OSC d=", d, "a=", a)
+                if d < best_d:
+                    best_d = d
+                    best_a = a
+
+        # Perform back-and-forth oscillation passes
+        for i in range(passes):
+            # Left sweep to -amp
+            sample_during_turn(-amp_deg)
+            # Right sweep to +amp
+            sample_during_turn(+amp_deg)
+
+        # Return to center (optional; do not record in can path here)
+        sample_during_turn(0)
+
+        # Restore turn rate
+        if prev_tr is not None:
+            self.drivebase.settings(turn_rate=prev_tr)
+
+        # Validate best distance against acceptance threshold
+        if best_d <= CONSTANTS["CAN_FIRST_HIT_MAX_MM"]:
+            return best_a, best_d
+        return None, None
+
+    def find_can_angle_micro_oscillation_full360(self, amp_deg=None, center_step_deg=None, passes=None):
+        """Cover the full 360° by oscillating around advancing centers.
+        Returns (angle_deg, min_dist_mm) or (None, None).
+        """
+        if amp_deg is None:
+            amp_deg = CONSTANTS["CAN_OSC_AMP_DEG"]
+        if center_step_deg is None:
+            center_step_deg = CONSTANTS["CAN_OSC_CENTER_STEP_DEG"]
+        if passes is None:
+            passes = CONSTANTS["CAN_OSC_PASSES"]
+
+        # Save/override turn rate for precise oscillation
+        try:
+            ss, sa, prev_tr, ta = self.drivebase.settings()
+        except Exception:
+            prev_tr = None
+        self.drivebase.settings(turn_rate=CONSTANTS["CAN_OSC_TURN_RATE"])
+
+        self.drivebase.reset()  # set absolute angle reference
+        best_d = 9999
+        best_a = None
+
+        def sample_during_turn(target_abs_angle):
+            nonlocal best_d, best_a
+            delta = target_abs_angle - self.drivebase.angle()
+            self.sharp_turn_in_degrees(delta, wait=False)
+            while not self.drivebase.done():
+                d = self.read_ultra_mm_can()
+                a = self.drivebase.angle()
+                self.can_log("CAN OSC360 d=", d, "a=", a)
+                if d < best_d:
+                    best_d = d
+                    best_a = a
+
+        # Centers from 0 to <360 in steps
+        centers = list(range(0, 360, max(1, int(center_step_deg))))
+        for _ in range(passes):
+            for c in centers:
+                # Oscillate around center c
+                sample_during_turn(c - amp_deg)
+                sample_during_turn(c + amp_deg)
+
+        # Return to nearest center (optional tidy)
+        sample_during_turn(0)
+
+        # Restore turn rate
+        if prev_tr is not None:
+            self.drivebase.settings(turn_rate=prev_tr)
+
+        if best_a is None:
+            return None, None
+        if best_d <= CONSTANTS["CAN_FIRST_HIT_MAX_MM"]:
+            return best_a, best_d
+        return None, None
+
+    def approach_can_at_angle(self, target_angle_deg, stop_offset_mm=20, max_step_mm=30):
+        """Face target and step forward until within offset (no micro-sweeps).
+        Returns the total forward distance moved (mm).
+        """
+        total_forward = 0
+        current = self.drivebase.angle()
+        # Face the target once, then keep heading fixed during the approach
+        self.can_turn(target_angle_deg - current)
+        while True:
+            d = self.read_ultra_mm_can()
+            self.can_log("CAN APPROACH d=", d)
+            if d >= 9000:
+                break  # lost target
+            if d <= stop_offset_mm + 5:
+                break
+
+            step = max(10, min(max_step_mm, d - stop_offset_mm))
+            self.can_log("CAN APPROACH step=", step)
+            self.can_move_forward(step)
+            total_forward += step
+        return total_forward
+
+    def push_can_off_spill(self, step_mm=20, confirm=3, max_push_mm=500):
+        """Drive forward in steps while on green; stop when off-green confirmed.
+        Returns total forward distance moved (mm).
+        """
+        pushed = 0
+        off_count = 0
+        while pushed < max_push_mm:
+            self.get_colors()
+            on_green = (self.left_color == Color.GREEN) or (self.right_color == Color.GREEN)
+            du = self.read_ultra_mm_can()
+            self.can_log("CAN PUSH on_green=", on_green, "d=", du)
+            if not on_green:
+                off_count += 1
+                if off_count >= confirm:
+                    break
+            else:
+                off_count = 0
+            self.can_move_forward(step_mm)
+            pushed += step_mm
+        return pushed
+
     def green_spill_ending(self):
-        self.move_forward(10)
+        # Begin path recording at spill entry to enable exact return later
+        self.can_start_recording()
+        # move off the line a bit, verify green
+        self.can_move_forward(10)
         self.get_colors()
         if self.left_color != Color.GREEN or self.right_color != Color.GREEN:
-            self.move_forward(-10)
+            # Not truly in green: reverse recorded path to entry and abort
+            self.can_backtrack()
             return
 
-        self.drivebase.settings( # Slow down
+        # slow settings for precision
+        self.drivebase.settings(
             straight_speed=80,
             straight_acceleration=450,
             turn_rate=140,
             turn_acceleration=1600
         )
 
-        self.rotate_arm(-86, stop_method=Stop.HOLD) # Arm up
+        self.rotate_arm(-86, stop_method=Stop.HOLD)  # Arm up
 
-        self.move_forward(280) # Go to middle - 10 (because already moved forward 10)
-        self.move_forward(-20) # Go back just in case hit the can
-        # self.hub.imu.reset_heading(0)
+        # center in spill
+        self.can_move_forward(280)
+        self.can_move_forward(-20)
+        self.stop_motors()
 
-        self.stop_motors() # Stop
+        # --- Two fast 360s, then slow sweeps; on hit, sweep edges and take midpoint ---
+        mid_angle, min_dist = self.find_can_edges_midpoint(
+            sweep_deg=160, threshold=CONSTANTS["CAN_SCAN_MAX_MM"]
+        )
+        if mid_angle is None:
+            # nothing found; exit without more spinning
+            self.settings_default()
+            return
 
-        lowest_ultrasonic = 2000
-        while lowest_ultrasonic == 2000:
-            lowest_ultrasonic, lowest_ultrasonic_angle = self.turn_and_detect_ultrasonic() # Turn 360 degrees, find the lowest ultrasonic and angle
+        # Approach along the detected midpoint angle
+        self.approach_can_at_angle(mid_angle, stop_offset_mm=20)
 
-        if lowest_ultrasonic_angle > 180:
-            lowest_ultrasonic_angle -= 360
+        # Grab
+        self.rotate_arm(-95, stop_method=Stop.COAST, wait=True)
 
-        self.drivebase.reset()
+        # Push the can forward until off the green spill, then release
+        push_forward = self.push_can_off_spill(
+            step_mm=CONSTANTS["CAN_PUSH_STEP_MM"],
+            confirm=CONSTANTS["CAN_PUSH_CONFIRM"],
+            max_push_mm=CONSTANTS["CAN_PUSH_MAX_MM"],
+        )
 
-        self.sharp_turn_in_degrees(lowest_ultrasonic_angle) # Turn to the lowest ultrasonic
-        self.move_forward(lowest_ultrasonic - 20) # Go to the lowest ultrasonic
-        self.rotate_arm(-95, stop_method=Stop.COAST, wait=True) # Arm down, capture the can
+        # Open/release and back up a bit to clear the can
+        self.rotate_arm(180)
+        self.can_move_forward(-CONSTANTS["CAN_RELEASE_BACK_MM"])  # clear the can
 
-        # self.sharp_turn_in_degrees(180)
-        self.move_forward(-(lowest_ultrasonic - 20)) # Go back to middle
+        # Return exactly to the spill entry by reversing the recorded path
+        self.can_backtrack()
 
-        return_to_exit_angle = -self.hub.imu.heading() + 180
-        if return_to_exit_angle > 180:
-            return_to_exit_angle -= 360
+        # Turn 180 and drive forward to exit the green spill so line follow can resume
+        self.sharp_turn_in_degrees(180)
+        self.exit_green_spill_forward(
+            step_mm=CONSTANTS["SPILL_EXIT_STEP_MM"],
+            confirm=CONSTANTS["SPILL_EXIT_CONFIRM"],
+            max_mm=CONSTANTS["SPILL_EXIT_MAX_MM"],
+        )
 
-        self.sharp_turn_in_degrees(return_to_exit_angle * CONSTANTS["TURNING_WITH_WEIGHT_CORRECITON_MULTIPLIER"]) # Turn back, and face exit
-        self.move_forward(270) # Go to exit
+        # Resume default settings and line following
+        self.settings_default()
+        self.robot_state = "line"
 
-        self.sharp_turn_in_degrees(60) # Turn 45 degrees 
-        self.move_forward(70) # Go forward a bit so the can is not on the path
-        self.rotate_arm(180) # Arm up, release the can
-        self.move_forward(-70) # Go back
-        self.sharp_turn_in_degrees(-60) # Turn back
-
-        self.settings_default() # Reset speed and settings
-
-        self.move_forward(10) # Hopefully sense the black line again
+    def exit_green_spill_forward(self, step_mm=20, confirm=3, max_mm=400):
+        """From within a green spill, drive forward until both sensors are not green.
+        Uses a small confirmation to avoid flapping.
+        """
+        moved = 0
+        off_count = 0
+        while moved < max_mm:
+            self.get_colors()
+            both_green = self.left_color == Color.GREEN and self.right_color == Color.GREEN
+            du = self.read_ultra_mm_can()
+            self.can_log("SPILL EXIT both_green=", both_green, "d=", du)
+            if not both_green:
+                off_count += 1
+                if off_count >= confirm:
+                    break
+            else:
+                off_count = 0
+            self.move_forward(step_mm)
+            moved += step_mm
+        return moved
 
     def avoid_obstacle(self):
         self.stop_motors()
@@ -305,18 +809,21 @@ class Robot:
         self.drivebase.curve(CONSTANTS["CURVE_RADIUS_OBSTACLE"], -CONSTANTS["OBSTACLE_TURN_DEGREES"], Stop.BRAKE, True)
         self.start_motors(CONSTANTS["OBSTACLE_MOVE_SPEED"], CONSTANTS["OBSTACLE_MOVE_SPEED"])
 
-        self.get_colors() # Re-read colors after turning
-        while self.right_color == Color.WHITE: # Keep turning until right sensor sees something other than white
+        self.get_colors()
+        start_ms = self.clock.time()
+        while self.right_color == Color.WHITE:
+            if self.clock.time() - start_ms > CONSTANTS["OBSTACLE_WHITE_TIMEOUT_MS"]:
+                break
             self.get_colors()
         self.turn_in_degrees(CONSTANTS["OBSTACLE_FINAL_TURN_DEGREES"])
-        self.robot_state = "straight" # Reset state after handling obstacle
+        self.robot_state = "straight"
         self.move_arm_back_after_obstacle_time = self.iteration_count + CONSTANTS["OBSTACLE_ARM_RETURN_DELAY"]
     
     def update(self):
-        """Update the state of the robot."""
         self.get_colors()
+        # obstacle logic uses the close-range threshold
         self.ultrasonic = self.ultrasonic_sensor.distance()
-
+        self.log("Ultrasonic distance (mm):", self.ultrasonic)
         self.previous_state = self.robot_state
 
         if self.move_arm_back_after_obstacle_time != False:
@@ -339,48 +846,36 @@ class Robot:
         if self.left_color == Color.WHITE and self.right_color == Color.WHITE:
             self.on_inverted = False
         
-        # Check for obstacle
-        if self.ultrasonic < CONSTANTS["ULTRASONIC_THRESHOLD"]:
+        if self.ultrasonic is not None and self.ultrasonic < CONSTANTS["ULTRASONIC_THRESHOLD"]:
             self.robot_state = "obstacle"
-            return # Exit update early if obstacle detected
+            return
 
-        # Shortcut / Yellow
         elif ALLOW_YELLOW and (self.left_color == Color.YELLOW or self.right_color == Color.YELLOW):
             self.robot_state = "yellow line"
             if not self.shortcut_information["is following shortcut"]:
                 if self.left_color == Color.YELLOW:
                     self.turn_in_degrees(-90)
-
-                    if self.shortcut_information["first turned"] == None:
+                    if self.shortcut_information["first turned"] is None:
                         self.shortcut_information["first turned"] = "left"
-
                 if self.right_color == Color.YELLOW:
                     self.turn_in_degrees(90)
-
-                    if self.shortcut_information["first turned"] == None:
+                    if self.shortcut_information["first turned"] is None:
                         self.shortcut_information["first turned"] = "right"
-            
             self.shortcut_information["is following shortcut"] = True
         
-        # Line
         elif not self.shortcut_information["is following shortcut"] and \
             self.left_color in [Color.WHITE, Color.BLACK, Color.GRAY] and \
             self.right_color in [Color.WHITE, Color.BLACK, Color.GRAY] and \
-            not (self.left_color == self.right_color and self.left_color == Color.GRAY): # Both not gray
+            not (self.left_color == self.right_color and self.left_color == Color.GRAY):
             self.robot_state = "line"
 
-        # Turn / Green
         elif self.left_color == Color.GREEN:
             self.robot_state = "green left"
         elif self.right_color == Color.GREEN:
             self.robot_state = "green right"
-
-        # Nothing
         else:
             self.robot_state = "line"
-            # self.robot_state = "stop"
 
-        # Stopping shortcut
         if self.left_color == Color.BLACK:
             self.shortcut_information["left seen black since"] = True
         if self.right_color == Color.BLACK:
@@ -388,58 +883,39 @@ class Robot:
 
         if self.shortcut_information["left seen black since"] and self.shortcut_information["right seen black since"]:
             if self.shortcut_information["first turned"] == "left":
-                self.turn_in_degrees(90) # Turn right if it turned left for the shortcut
+                self.turn_in_degrees(90)
             else:
-                self.turn_in_degrees(-90) # Turn left if it turned right for the shortcut
-
-            self.robot_state = "line" # Go back to normal line following
+                self.turn_in_degrees(-90)
+            self.robot_state = "line"
             self.shortcut_information = self.default_shortcut_information.copy()
 
     def move(self):
-        """Move the robot based on its current state."""
-        # Gray
         if self.robot_state == "gray":
             self.green_spill_ending()
-        
-        # Obstacle
         elif self.robot_state == "obstacle":
             self.avoid_obstacle()
-
-        # ShortcutYellow
         elif self.shortcut_information["is following shortcut"]:
             self.follow_color()
-        
-        # Line
         elif self.robot_state == "line":
             self.follow_line()
-
-        # Green
         elif self.robot_state == "green left":
             self.stop_motors()
             self.turn_green("left")
         elif self.robot_state == "green right":
             self.stop_motors()
             self.turn_green("right")
-
-        # Stop
         elif self.robot_state == "stop":
             self.stop_motors()
 
     def debug(self):
-        """Print debug text."""
-        # print(self.robot_state)
-        # print(self.left_color_sensor_information, self.left_color)
-        # print(self.right_color_sensor_information, self.right_color)
-        # print(self.left_color, self.right_color)
-        # print(self.iteration_count)
-        # print(self.ultrasonic)
         pass
 
     def run(self):
         self.battery_display()
-        self.rotate_arm(180, Stop.COAST_SMART) # Reset
+        # Reset arm position if needed using a valid stop method
+        self.rotate_arm(180, Stop.COAST)
         while True:
-            self.iteration_count += 1 # Increment the counter at the start of each loop
+            self.iteration_count += 1
             self.update()
             self.move()
             self.debug()
@@ -448,4 +924,4 @@ def main():
     robot = Robot()
     robot.run()
 
-main() # Note: don't put in if __name__ == "__main__" because __name__ is something different for robot
+main()
