@@ -85,6 +85,15 @@ CONSTANTS = {
     "BATTERY_V_MAX_MV": 8400,          # tune to your hub pack (full)
     "BATTERY_WARN_PERCENT": 85,         # warn when below this percent
     "BATTERY_STATUS_INTERVAL_MS": 30000,
+    # Behavior toggles
+    "SOUNDS_ENABLED": True,             # control state-change beeps
+    "REQUIRE_START_BUTTON": True,       # wait for RIGHT button before starting loop
+    "TREAT_GRAY_AS_SPILL": False,       # if True, treat both-sensor GRAY as spill entry
+    "ENABLE_INVERTED_MODE": False,      # auto-switch follow_line error sign on inverted tracks
+    # Green spill detection stability
+    "GREEN_DETECT_CONFIRM": 3,          # cycles before entering green-left/right state
+    "SPILL_ENTRY_CONFIRM": 3,           # consecutive reads to confirm in-spill during turn
+    "SPILL_RETRY_COOLDOWN_MS": 1200,    # initial cooldown after a failed turn_green
 }
 
 # Preferred corrected key; keep legacy key for backward compatibility
@@ -154,6 +163,11 @@ class Robot:
         # Can sweep behavior: after two failed 360 sweeps, switch to slow sweeps permanently
         self.can_sweep_slow_mode = False
         self.spill_entry_heading = None
+        # Green detection helpers
+        self._green_left_count = 0
+        self._green_right_count = 0
+        self._spill_cooldown_until = 0
+        self._spill_retry_backoff_ms = CONSTANTS.get("SPILL_RETRY_COOLDOWN_MS", 1200)
 
     # --- helpers ---
     def read_ultra_mm(self):
@@ -247,6 +261,8 @@ class Robot:
     # --- Sounds ---
     def announce_state(self, state):
         """Play a short, distinct beep pattern for each state start."""
+        if not CONSTANTS.get("SOUNDS_ENABLED", True):
+            return
         sp = self.hub.speaker
         try:
             if state == "line":
@@ -395,22 +411,31 @@ class Robot:
         self.drivebase.curve(CONSTANTS["CURVE_RADIUS_GREEN"], degrees, Stop.COAST, False)
 
         entered = False
+        confirm_needed = CONSTANTS.get("SPILL_ENTRY_CONFIRM", 2)
+        confirm = 0
         while not self.drivebase.done():
             self.get_colors()
-            if (
-                (self.left_color == Color.GREEN and self.right_color == Color.GREEN)
-                or (self.left_color == Color.GRAY and self.right_color == Color.GRAY)
-            ):
-                self.drivebase.stop()
-                self.green_spill_ending()
-                entered = True
-                break
+            both_green = (self.left_color == Color.GREEN and self.right_color == Color.GREEN)
+            both_gray = (self.left_color == Color.GRAY and self.right_color == Color.GRAY)
+            if both_green or (CONSTANTS.get("TREAT_GRAY_AS_SPILL", False) and both_gray):
+                confirm += 1
+                if confirm >= confirm_needed:
+                    self.drivebase.stop()
+                    self.green_spill_ending()
+                    entered = True
+                    break
+            else:
+                confirm = 0
 
         if not entered:
             # Undo the small forward nudge so we don't drift off the line over time
             self.move_forward(-CONSTANTS["BACK_AFTER_GREEN_TURN_DISTANCE"])
-            # Ensure we resume normal behavior
+            # Ensure we resume normal behavior and start a short cooldown
             self.robot_state = "line"
+            now = self.clock.time()
+            self._spill_cooldown_until = now + self._spill_retry_backoff_ms
+            # Exponential backoff up to 5s to avoid repeated attempts/beeps
+            self._spill_retry_backoff_ms = min(5000, int(self._spill_retry_backoff_ms * 2))
 
     def follow_line(self):
         # Simple PD line follow with dynamic slowdown; no blocking, no pivots
@@ -870,6 +895,8 @@ class Robot:
         return pushed
 
     def green_spill_ending(self):
+        # Reset spill retry backoff on successful entry
+        self._spill_retry_backoff_ms = CONSTANTS.get("SPILL_RETRY_COOLDOWN_MS", 1200)
         # Begin path recording at spill entry to enable exact return later
         self.can_start_recording()
         # Remember entry heading to face spill back later
@@ -1179,10 +1206,27 @@ class Robot:
             not (self.left_color == self.right_color and self.left_color == Color.GRAY):
             self.robot_state = "line"
 
-        elif self.left_color == Color.GREEN:
-            self.robot_state = "green left"
-        elif self.right_color == Color.GREEN:
-            self.robot_state = "green right"
+        elif self.left_color == Color.GREEN or self.right_color == Color.GREEN:
+            # Debounce green detection to avoid flapping
+            if self.left_color == Color.GREEN:
+                self._green_left_count += 1
+            else:
+                self._green_left_count = 0
+            if self.right_color == Color.GREEN:
+                self._green_right_count += 1
+            else:
+                self._green_right_count = 0
+
+            if self.clock.time() >= self._spill_cooldown_until:
+                if self._green_left_count >= CONSTANTS.get("GREEN_DETECT_CONFIRM", 2):
+                    self.robot_state = "green left"
+                elif self._green_right_count >= CONSTANTS.get("GREEN_DETECT_CONFIRM", 2):
+                    self.robot_state = "green right"
+                else:
+                    self.robot_state = "line"
+            else:
+                # In cooldown, ignore transient greens
+                self.robot_state = "line"
         else:
             self.robot_state = "line"
 
