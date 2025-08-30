@@ -32,7 +32,7 @@ CONSTANTS = {
     "OBSTACLE_ARM_RETURN_DELAY": 3000,
     "CURVE_RADIUS_LINE_FOLLOW": 4,
     "MAX_TURN_RATE": 150,
-    "BLACK_COUNTER_THRESHOLD": 1000,
+    "BLACK_COUNTER_THRESHOLD": 100,
     "TURNING_WITH_WEIGHT_CORRECITON_MULTIPLIER": 1.03,
     # Timeout (ms) to avoid getting stuck while leaving white during obstacle bypass
     "OBSTACLE_WHITE_TIMEOUT_MS": 2500,
@@ -66,6 +66,9 @@ CONSTANTS = {
     "LINE_REACQUIRE_STEP_MM": 15,
     "LINE_REACQUIRE_CONFIRM": 2,
     "LINE_REACQUIRE_MAX_MM": 400,
+    "LINE_REACQUIRE_BACK_MM": 100,
+    "LINE_REACQUIRE_TURN_STEP_DEG": 10,
+    "LINE_REACQUIRE_TURN_MAX_DEG": 120,
     "CAN_SEGMENT_MIN_POINTS": 4,
     "CAN_REFINE_SWEEP_DEG": 12,
     # Push off spill + exit spill tuning
@@ -831,11 +834,22 @@ class Robot:
             max_mm=CONSTANTS["SPILL_EXIT_MAX_MM"],
         )
 
-        # Try to reacquire the line after exiting the spill
-        self.reacquire_line_forward(
-            step_mm=CONSTANTS["LINE_REACQUIRE_STEP_MM"],
+        # Nudge backward a little so the line reacquire starts just after the spill boundary
+        self.move_forward(-CONSTANTS["LINE_REACQUIRE_BACK_MM"])
+        # If we accidentally stepped back onto green, step forward minimally to clear it
+        self.get_colors()
+        if self.left_color == Color.GREEN and self.right_color == Color.GREEN:
+            self.exit_green_spill_forward(
+                step_mm=CONSTANTS["SPILL_EXIT_STEP_MM"],
+                confirm=CONSTANTS["SPILL_EXIT_CONFIRM"],
+                max_mm=CONSTANTS["SPILL_EXIT_STEP_MM"] * 3,
+            )
+
+        # Try to reacquire the line after exiting the spill by oscillating turns
+        self.reacquire_line_oscillate(
+            step_deg=CONSTANTS["LINE_REACQUIRE_TURN_STEP_DEG"],
+            max_deg=CONSTANTS["LINE_REACQUIRE_TURN_MAX_DEG"],
             confirm=CONSTANTS["LINE_REACQUIRE_CONFIRM"],
-            max_mm=CONSTANTS["LINE_REACQUIRE_MAX_MM"],
         )
 
         # Resume default settings and line following
@@ -863,24 +877,51 @@ class Robot:
             moved += step_mm
         return moved
 
-    def reacquire_line_forward(self, step_mm=15, confirm=2, max_mm=400):
-        """After exiting green, drive forward in small steps until black line is seen on either sensor.
-        Uses confirmation to avoid noise.
+    def reacquire_line_oscillate(self, step_deg=10, max_deg=120, confirm=2):
+        """After exiting green, oscillate left/right around current heading to find the black line.
+        Turns incrementally without driving forward. Returns True if found, else False.
         """
-        moved = 0
-        seen_count = 0
-        while moved < max_mm:
-            self.get_colors()
-            on_line = (self.left_color == Color.BLACK) or (self.right_color == Color.BLACK)
-            if on_line:
-                seen_count += 1
-                if seen_count >= confirm:
-                    break
-            else:
-                seen_count = 0
-            self.move_forward(step_mm)
-            moved += step_mm
-        return moved
+        # Helper to confirm line for N consecutive reads
+        def confirm_line(n):
+            count = 0
+            for _ in range(max(1, n)):
+                self.get_colors()
+                if self.left_color == Color.BLACK or self.right_color == Color.BLACK:
+                    count += 1
+                else:
+                    count = 0
+                if count >= n:
+                    return True
+                wait(5)
+            return False
+
+        # Start centered
+        current_offset = 0
+        if confirm_line(confirm):
+            return True
+
+        # Sweep left/right with increasing amplitude
+        amp = step_deg
+        while amp <= max_deg:
+            # Left to -amp
+            delta = -amp - current_offset
+            if delta != 0:
+                self.sharp_turn_in_degrees(delta)
+                current_offset += delta
+            if confirm_line(confirm):
+                return True
+
+            # Right to +amp
+            delta = amp - current_offset
+            if delta != 0:
+                self.sharp_turn_in_degrees(delta)
+                current_offset += delta
+            if confirm_line(confirm):
+                return True
+
+            amp += step_deg
+
+        return False
 
     def avoid_obstacle(self):
         self.stop_motors()
