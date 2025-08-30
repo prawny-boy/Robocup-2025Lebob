@@ -62,6 +62,10 @@ CONSTANTS = {
     "CAN_OSC_PASSES": 3,                # number of back-and-forth passes
     "CAN_OSC_TURN_RATE": 60,            # deg/s during oscillation
     "CAN_OSC_CENTER_STEP_DEG": 30,      # center advance step to cover full 360
+    # Line reacquire after spill exit
+    "LINE_REACQUIRE_STEP_MM": 15,
+    "LINE_REACQUIRE_CONFIRM": 2,
+    "LINE_REACQUIRE_MAX_MM": 400,
     "CAN_SEGMENT_MIN_POINTS": 4,
     "CAN_REFINE_SWEEP_DEG": 12,
     # Push off spill + exit spill tuning
@@ -133,6 +137,7 @@ class Robot:
         self.can_path = []  # list of (action, value), action in {"move", "turn"}
         # Can sweep behavior: after two failed 360 sweeps, switch to slow sweeps permanently
         self.can_sweep_slow_mode = False
+        self.spill_entry_heading = None
 
     # --- helpers ---
     def read_ultra_mm(self):
@@ -201,6 +206,22 @@ class Robot:
     def can_cancel_recording(self):
         self.can_path = []
         self.can_recording = False
+
+    def normalize_angle(self, angle):
+        # normalize to [-180, 180)
+        a = ((angle + 180) % 360) - 180
+        return a
+
+    def face_heading(self, target_heading_deg):
+        try:
+            current = self.hub.imu.heading()
+        except Exception:
+            current = 0
+        delta = self.normalize_angle(target_heading_deg - current)
+        if self.can_recording:
+            self.can_turn(delta)
+        else:
+            self.sharp_turn_in_degrees(delta)
 
     def can_move_forward(self, distance, speed=None, wait=True):
         if self.can_recording:
@@ -714,9 +735,38 @@ class Robot:
             pushed += step_mm
         return pushed
 
+    def push_can_to_back_of_spill_until_boundary(self, step_mm=20, bound_confirm=3, max_push_mm=700):
+        """Face toward spill back (entry heading) and push until both sensors see red or both see white.
+        Returns total forward distance moved (mm).
+        """
+        if self.spill_entry_heading is not None:
+            self.face_heading(self.spill_entry_heading)
+        pushed = 0
+        hit_confirm = 0
+        while pushed < max_push_mm:
+            self.get_colors()
+            boundary = (
+                (self.left_color == Color.RED and self.right_color == Color.RED)
+                or (self.left_color == Color.WHITE and self.right_color == Color.WHITE)
+            )
+            if boundary:
+                hit_confirm += 1
+                if hit_confirm >= bound_confirm:
+                    break
+            else:
+                hit_confirm = 0
+            self.can_move_forward(step_mm)
+            pushed += step_mm
+        return pushed
+
     def green_spill_ending(self):
         # Begin path recording at spill entry to enable exact return later
         self.can_start_recording()
+        # Remember entry heading to face spill back later
+        try:
+            self.spill_entry_heading = self.hub.imu.heading()
+        except Exception:
+            self.spill_entry_heading = None
         # move off the line a bit, verify green
         self.can_move_forward(10)
         self.get_colors()
@@ -755,10 +805,10 @@ class Robot:
         # Grab
         self.rotate_arm(-95, stop_method=Stop.COAST, wait=True)
 
-        # Push the can forward until off the green spill, then release
-        push_forward = self.push_can_off_spill(
+        # Push the can toward the back of the spill until boundary (two RED or two WHITE), then release
+        push_forward = self.push_can_to_back_of_spill_until_boundary(
             step_mm=CONSTANTS["CAN_PUSH_STEP_MM"],
-            confirm=CONSTANTS["CAN_PUSH_CONFIRM"],
+            bound_confirm=CONSTANTS["CAN_PUSH_CONFIRM"],
             max_push_mm=CONSTANTS["CAN_PUSH_MAX_MM"],
         )
 
@@ -769,12 +819,23 @@ class Robot:
         # Return exactly to the spill entry by reversing the recorded path
         self.can_backtrack()
 
-        # Turn 180 and drive forward to exit the green spill so line follow can resume
-        self.sharp_turn_in_degrees(180)
+        # Face outward (opposite of entry heading) and drive forward to exit the green spill so line follow can resume
+        if self.spill_entry_heading is not None:
+            exit_heading = self.normalize_angle(self.spill_entry_heading + 180)
+            self.face_heading(exit_heading)
+        else:
+            self.sharp_turn_in_degrees(180)
         self.exit_green_spill_forward(
             step_mm=CONSTANTS["SPILL_EXIT_STEP_MM"],
             confirm=CONSTANTS["SPILL_EXIT_CONFIRM"],
             max_mm=CONSTANTS["SPILL_EXIT_MAX_MM"],
+        )
+
+        # Try to reacquire the line after exiting the spill
+        self.reacquire_line_forward(
+            step_mm=CONSTANTS["LINE_REACQUIRE_STEP_MM"],
+            confirm=CONSTANTS["LINE_REACQUIRE_CONFIRM"],
+            max_mm=CONSTANTS["LINE_REACQUIRE_MAX_MM"],
         )
 
         # Resume default settings and line following
@@ -798,6 +859,25 @@ class Robot:
                     break
             else:
                 off_count = 0
+            self.move_forward(step_mm)
+            moved += step_mm
+        return moved
+
+    def reacquire_line_forward(self, step_mm=15, confirm=2, max_mm=400):
+        """After exiting green, drive forward in small steps until black line is seen on either sensor.
+        Uses confirmation to avoid noise.
+        """
+        moved = 0
+        seen_count = 0
+        while moved < max_mm:
+            self.get_colors()
+            on_line = (self.left_color == Color.BLACK) or (self.right_color == Color.BLACK)
+            if on_line:
+                seen_count += 1
+                if seen_count >= confirm:
+                    break
+            else:
+                seen_count = 0
             self.move_forward(step_mm)
             moved += step_mm
         return moved
