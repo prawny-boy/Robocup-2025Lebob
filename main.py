@@ -79,6 +79,11 @@ CONSTANTS = {
     "SPILL_EXIT_STEP_MM": 20,
     "SPILL_EXIT_CONFIRM": 3,
     "SPILL_EXIT_MAX_MM": 400,
+    # Battery status
+    "BATTERY_V_MIN_MV": 6600,          # tune to your hub pack (empty)
+    "BATTERY_V_MAX_MV": 8400,          # tune to your hub pack (full)
+    "BATTERY_WARN_PERCENT": 85,         # warn when below this percent
+    "BATTERY_STATUS_INTERVAL_MS": 30000,
 }
 
 # Preferred corrected key; keep legacy key for backward compatibility
@@ -179,13 +184,31 @@ class Robot:
         if self.debug_enabled:
             print(*msg)
 
+    # --- Battery helpers ---
+    def battery_percent(self):
+        try:
+            mv = self.hub.battery.voltage()
+        except Exception:
+            mv = None
+        if mv is None:
+            return None, None
+        v_min = CONSTANTS.get("BATTERY_V_MIN_MV", 6200)
+        v_max = CONSTANTS.get("BATTERY_V_MAX_MV", 8400)
+        mv = max(0, mv)
+        pct = int(max(0, min(100, round((mv - v_min) * 100 / max(1, (v_max - v_min))))))
+        return pct, mv / 1000.0
+
     def can_log(self, *msg):
         if CONSTANTS.get("CAN_DEBUG_PRINT", False):
             print(*msg)
 
     def battery_display(self):
-        battery_voltage = self.hub.battery.voltage()
-        self.log("Battery:", battery_voltage)
+        pct, volts = self.battery_percent()
+        if pct is None:
+            print("Battery: unknown")
+            return
+        warn = " (LOW)" if pct < CONSTANTS.get("BATTERY_WARN_PERCENT", 75) else ""
+        print("Battery:", f"{pct}%", f"({volts:.2f} V)" + warn)
     
     def turn_in_degrees(self, degrees, wait=False):
         """Turn in degrees with curve."""
@@ -739,14 +762,32 @@ class Robot:
         return pushed
 
     def push_can_to_back_of_spill_until_boundary(self, step_mm=20, bound_confirm=3, max_push_mm=700):
-        """Face toward spill back (entry heading) and push until both sensors see red or both see white.
+        """Face toward spill back (entry heading) and push with one continuous drive
+        until both sensors see red or both see white.
         Returns total forward distance moved (mm).
         """
+        # Face the original spill entry heading if known
         if self.spill_entry_heading is not None:
             self.face_heading(self.spill_entry_heading)
-        pushed = 0
+
+        # Use continuous drive forward at a steady speed, checking sensors on the fly.
+        # Keep speed consistent with prior "slow" precision settings used in spill logic.
+        push_speed = 80  # mm/s; matches slow precise movement set earlier
+
+        # Reset distance tracking so we can record a single move for backtrack
+        self.drivebase.reset()
+
+        # Start continuous forward motion
+        self.drivebase.drive(push_speed, 0)
+
         hit_confirm = 0
-        while pushed < max_push_mm:
+        while True:
+            # Optional safety cap on max push distance
+            pushed = abs(self.drivebase.distance())
+            if pushed >= max_push_mm:
+                break
+
+            # Read colors to detect the boundary condition (two RED or two WHITE)
             self.get_colors()
             boundary = (
                 (self.left_color == Color.RED and self.right_color == Color.RED)
@@ -758,8 +799,20 @@ class Robot:
                     break
             else:
                 hit_confirm = 0
-            self.can_move_forward(step_mm)
-            pushed += step_mm
+
+            # Brief wait to avoid saturating the loop while driving
+            wait(5)
+
+        # Stop driving
+        self.drivebase.stop()
+
+        # Final distance pushed in mm
+        pushed = abs(self.drivebase.distance())
+
+        # Record as a single movement in the can path so backtracking reverses it precisely
+        if self.can_recording and pushed > 0:
+            self.can_path.append(("move", pushed))
+
         return pushed
 
     def green_spill_ending(self):
@@ -945,6 +998,21 @@ class Robot:
         # obstacle logic uses the close-range threshold
         self.ultrasonic = self.ultrasonic_sensor.distance()
         self.log("Ultrasonic distance (mm):", self.ultrasonic)
+        # Battery warning (printed once when crossing threshold)
+        if not hasattr(self, "_battery_warned"):
+            self._battery_warned = False
+            self._last_batt_status = 0
+        pct, volts = self.battery_percent()
+        if pct is not None:
+            now = self.clock.time()
+            # periodic status
+            if now - self._last_batt_status > CONSTANTS.get("BATTERY_STATUS_INTERVAL_MS", 30000):
+                print("Battery:", f"{pct}%", f"({volts:.2f} V)")
+                self._last_batt_status = now
+            # low warning
+            if (pct < CONSTANTS.get("BATTERY_WARN_PERCENT", 75)) and (not self._battery_warned):
+                print("WARNING: Battery low:", f"{pct}%", f"({volts:.2f} V)")
+                self._battery_warned = True
         self.previous_state = self.robot_state
 
         if self.move_arm_back_after_obstacle_time != False:
