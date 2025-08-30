@@ -371,37 +371,46 @@ class Robot:
         self.start_motors(CONSTANTS["BLACK_WHEEL_SPEED"], CONSTANTS["BLACK_WHEEL_SPEED"])
     
     def turn_green(self, direction):
-        self.move_forward(10)
-        self.get_colors()
-        new_left_color = self.information_to_color(self.left_color_sensor_information)
-        new_right_color = self.information_to_color(self.right_color_sensor_information)
+        """Pivot toward a detected green marker and enter the spill.
+        More robust: always attempt the turn, accept both GREEN or overbright GRAY as spill,
+        and never return early leaving the robot stopped.
+        """
+        # Nudge forward a little from the detection point
+        self.move_forward(8)
 
-        if not ((direction == "left" and new_left_color == Color.GREEN) or (direction == "right" and new_right_color == Color.GREEN)):
-            return
-        elif (new_left_color == new_right_color == Color.GREEN):
+        # If we're already clearly on the spill (both GREEN or both GRAY), go straight in
+        self.get_colors()
+        if (
+            (self.left_color == Color.GREEN and self.right_color == Color.GREEN)
+            or (self.left_color == Color.GRAY and self.right_color == Color.GRAY)
+        ):
             self.drivebase.stop()
             self.green_spill_ending()
             return
 
-        if direction == "left":
-            degrees = -CONSTANTS["TURN_GREEN_DEGREES"] 
-        else:
-            degrees = CONSTANTS["TURN_GREEN_DEGREES"]
-        
-        # Turn without waiting so we can detect both sensors green and stop early
+        # Decide turn direction based on the side that saw green
+        degrees = -CONSTANTS["TURN_GREEN_DEGREES"] if direction == "left" else CONSTANTS["TURN_GREEN_DEGREES"]
+
+        # Turn without waiting so we can detect when we fully enter the spill
         self.drivebase.curve(CONSTANTS["CURVE_RADIUS_GREEN"], degrees, Stop.COAST, False)
 
-        stop = False
+        entered = False
         while not self.drivebase.done():
             self.get_colors()
-            if self.left_color == Color.GREEN and self.right_color == Color.GREEN:
+            if (
+                (self.left_color == Color.GREEN and self.right_color == Color.GREEN)
+                or (self.left_color == Color.GRAY and self.right_color == Color.GRAY)
+            ):
                 self.drivebase.stop()
                 self.green_spill_ending()
-                stop = True
+                entered = True
                 break
-        
-        if not stop:
+
+        if not entered:
+            # Undo the small forward nudge so we don't drift off the line over time
             self.move_forward(-CONSTANTS["BACK_AFTER_GREEN_TURN_DISTANCE"])
+            # Ensure we resume normal behavior
+            self.robot_state = "line"
 
     def follow_line(self):
         # Simple PD line follow with dynamic slowdown; no blocking, no pivots
@@ -871,8 +880,12 @@ class Robot:
         # move off the line a bit, verify green
         self.can_move_forward(10)
         self.get_colors()
-        if self.left_color != Color.GREEN or self.right_color != Color.GREEN:
-            # Not truly in green: reverse recorded path to entry and abort
+        in_spill = (
+            (self.left_color == Color.GREEN and self.right_color == Color.GREEN)
+            or (self.left_color == Color.GRAY and self.right_color == Color.GRAY)
+        )
+        if not in_spill:
+            # Not truly in green/gray spill: reverse recorded path to entry and abort
             self.can_backtrack()
             return
 
