@@ -178,9 +178,7 @@ class Robot:
     def read_ultra_mm(self):
         """Raw ultrasonic distance in mm; returns 9999 if no valid target."""
         d = self.ultrasonic_sensor.distance()
-        if d is None:
-            return 9999
-        return d
+        return 9999 if d is None else d
 
     def read_ultra_mm_obstacle(self):
         """Median-filtered ultrasonic for obstacle detection (no near/far rejection)."""
@@ -207,9 +205,7 @@ class Robot:
         m = samples[len(samples)//2]
         if m < CONSTANTS.get("CAN_MIN_VALID_MM", 60):
             return 9999
-        if m > CONSTANTS.get("CAN_IGNORE_ABOVE_MM", 1800):
-            return 9999
-        return m
+        return 9999 if m > CONSTANTS.get("CAN_IGNORE_ABOVE_MM", 1800) else m
 
     def settings_default(self):
         self.drivebase.settings(
@@ -247,7 +243,7 @@ class Robot:
             print("Battery: unknown")
             return
         warn = " (LOW)" if pct < CONSTANTS.get("BATTERY_WARN_PERCENT", 75) else ""
-        print("Battery:", f"{pct}%", f"({volts:.2f} V)" + warn)
+        print("Battery:", f"{pct}%", f"({volts:.2f} V){warn}")
     
     def turn_in_degrees(self, degrees, wait=False):
         """Turn by a small angle using a gentle curve."""
@@ -264,7 +260,7 @@ class Robot:
         self.drivebase.straight(distance, wait=wait)
 
     # --- Sounds ---
-    def announce_state(self, state):
+    def announce_state(self, state):  # sourcery skip: use-contextlib-suppress
         """Play a short, distinct beep pattern for each state start."""
         if not CONSTANTS.get("SOUNDS_ENABLED", True):
             return
@@ -300,9 +296,7 @@ class Robot:
         self.can_recording = False
 
     def normalize_angle(self, angle):
-        # normalize to [-180, 180)
-        a = ((angle + 180) % 360) - 180
-        return a
+        return ((angle + 180) % 360) - 180
 
     def face_heading(self, target_heading_deg):
         try:
@@ -469,7 +463,7 @@ class Robot:
         left_ref = self.left_color_sensor_information["reflection"]
         right_ref = self.right_color_sensor_information["reflection"]
 
-        error = (left_ref - right_ref) if not self.on_inverted else (right_ref - left_ref)
+        error = right_ref - left_ref if self.on_inverted else left_ref - right_ref
 
         kp = CONSTANTS["LINE_KP"]
         kd = CONSTANTS["LINE_KD"]
@@ -578,6 +572,7 @@ class Robot:
                 self.robot_state = "line"
 
     def execute_yellow_shortcut(self, direction):
+        # sourcery skip: use-contextlib-suppress
         """Perform the deterministic yellow shortcut movement and resume line.
         direction: 'left' or 'right'
         Sequence per spec:
@@ -1208,7 +1203,7 @@ class Robot:
             self.get_colors()
             left_ref = self.left_color_sensor_information["reflection"]
             right_ref = self.right_color_sensor_information["reflection"]
-            error = (left_ref - right_ref) if not self.on_inverted else (right_ref - left_ref)
+            error = right_ref - left_ref if self.on_inverted else left_ref - right_ref
             d_err = error - prev_err
             prev_err = error
             if abs(error) <= err_tol:
@@ -1284,10 +1279,9 @@ class Robot:
         # previous_state is updated after move() executes
 
         # Timed arm return after obstacle
-        if self.move_arm_back_after_obstacle_time is not None:
-            if self.clock.time() >= self.move_arm_back_after_obstacle_time:
-                self.move_arm_back_after_obstacle_time = None
-                self.rotate_arm(90, stop_method=Stop.COAST)
+        if self.move_arm_back_after_obstacle_time is not None and self.clock.time() >= self.move_arm_back_after_obstacle_time:
+            self.move_arm_back_after_obstacle_time = None
+            self.rotate_arm(90, stop_method=Stop.COAST)
 
         # Enter spill only when both GREEN (or both GRAY if explicitly enabled)
         both_green = (self.left_color == Color.GREEN and self.right_color == Color.GREEN)
@@ -1295,18 +1289,18 @@ class Robot:
         if both_green or (CONSTANTS.get("TREAT_GRAY_AS_SPILL", False) and both_gray):
             self.robot_state = "gray"
             return
-        
+
         if self.left_color == Color.BLACK and self.right_color == Color.BLACK:
             self.black_counter += 1
             self.both_black_slow()
         else:
             self.black_counter = 0
-        
+
         if self.black_counter > CONSTANTS["BLACK_COUNTER_THRESHOLD"]:
             self.on_inverted = True
         if self.left_color == Color.WHITE and self.right_color == Color.WHITE:
             self.on_inverted = False
-        
+
         if self.ultrasonic is not None and self.ultrasonic < CONSTANTS["ULTRASONIC_THRESHOLD"]:
             self._obstacle_below_count += 1
         else:
@@ -1322,11 +1316,16 @@ class Robot:
                 self.robot_state = "yellow-right"
             else:
                 self.robot_state = "yellow-left"
-        
-        elif not self.shortcut_information["is following shortcut"] and \
-            self.left_color in [Color.WHITE, Color.BLACK, Color.GRAY] and \
-            self.right_color in [Color.WHITE, Color.BLACK, Color.GRAY] and \
-            not (self.left_color == self.right_color and self.left_color == Color.GRAY):
+
+        elif (
+            not self.shortcut_information["is following shortcut"]
+            and self.left_color in [Color.WHITE, Color.BLACK, Color.GRAY]
+            and self.right_color in [Color.WHITE, Color.BLACK, Color.GRAY]
+            and (
+                self.left_color != self.right_color
+                or self.left_color != Color.GRAY
+            )
+        ):
             self.robot_state = "line"
 
         elif self.left_color == Color.GREEN or self.right_color == Color.GREEN:
@@ -1386,7 +1385,7 @@ class Robot:
         # No debug printing per request
         pass
 
-    def run(self):
+    def run(self):  # sourcery skip: use-contextlib-suppress
         self.battery_display()
         # Reset arm position if needed using a valid stop method
         self.rotate_arm(180, Stop.COAST)
@@ -1402,7 +1401,7 @@ class Robot:
             self.move()
             self.debug()
 
-def main():
+def main():  # sourcery skip: use-contextlib-suppress
     robot = Robot()
     try:
         robot.run()
