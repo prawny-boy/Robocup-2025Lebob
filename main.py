@@ -5,7 +5,7 @@ from pybricks.parameters import Port, Color, Axis, Direction, Button, Stop
 from pybricks.tools import StopWatch, wait
 
 # Enable/disable optional yellow-line shortcut behavior
-ALLOW_YELLOW = False
+ALLOW_YELLOW = True
 
 # --- CONSTANTS ---
 CONSTANTS = {
@@ -87,6 +87,9 @@ CONSTANTS = {
     "SPILL_RETRY_COOLDOWN_MS": 1200,    # initial cooldown after a failed turn_green
     # Obstacle reacquire guard
     "OBSTACLE_REACQUIRE_MAX_MM": 220,    # hard cap forward travel while searching for line
+    # Yellow shortcut (deterministic sequence)
+    "YELLOW_SHORTCUT_TURN_DEG": 90,
+    "YELLOW_SHORTCUT_STEP_MM": 200,
 }
 
  
@@ -138,6 +141,18 @@ class Robot:
         self.corner_hold = 0
         self.line_pivoting = False
         self._obstacle_below_count = 0
+        # Derivative filter and assists
+        self.d_err_filtered = 0.0
+        self.corner_until_ms = 0
+        # Black-contact slowdown helpers
+        self.prev_left_is_black = False
+        self.prev_right_is_black = False
+        self.black_slow_until_ms = 0
+        # Yellow shortcut helpers
+        self.yellow_last_seen_side = 0   # -1=left, +1=right, 0=unknown
+        self.yellow_black_confirm = 0
+        self.y_l_score = 0.0
+        self.y_r_score = 0.0
 
         self.shortcut_information = {
             "is following shortcut": False,
@@ -358,6 +373,28 @@ class Robot:
         else:
             return Color.NONE
 
+    def yellow_score(self, information):
+        """Return a smooth 0..1 score for how 'yellow' the sensor sees.
+        Based on hue proximity to ~55deg and saturation/brightness.
+        """
+        hsv = information.get("hsv")
+        if hsv is None:
+            return 0.0
+        try:
+            h = float(hsv.h)
+            s = float(hsv.s)
+            v = float(hsv.v)
+        except Exception:
+            return 0.0
+        # Hue center and width
+        h_center = 55.0
+        h_width = 22.0   # full score within ~±10–15deg, taper to 0 at ~±22deg
+        h_score = max(0.0, 1.0 - abs(h - h_center) / max(1.0, h_width))
+        s_score = max(0.0, min(1.0, s / 100.0))
+        v_score = max(0.0, min(1.0, (v - 25.0) / 75.0))  # reduce score if too dark
+        # Weighted combination; emphasize hue, then saturation
+        return h_score * (0.6 + 0.3 * s_score + 0.1 * v_score)
+
     def get_colors(self):
         self.left_color_sensor_information = {
             "reflection": self.color_sensor_left.reflection(),
@@ -454,13 +491,120 @@ class Robot:
 
         self.drivebase.drive(speed, turn_rate)
     
-    def follow_color(self, color_to_follow=Color.YELLOW):
-        if self.left_color == color_to_follow:
-            self.turn_in_degrees(-CONSTANTS["TURN_YELLOW_DEGREES"])
-        elif self.right_color == color_to_follow:
-            self.turn_in_degrees(CONSTANTS["TURN_YELLOW_DEGREES"])
+    def follow_yellow(self):
+        """Follow the yellow shortcut line using a color-based PID.
+        Error is derived from which sensor sees yellow (-1,0,+1 scaled), with
+        filtering and speed shaping. Switch back to black only when no yellow
+        is seen and black is confirmed.
+        """
+        # Yellow presence
+        y_left = (self.left_color == Color.YELLOW)
+        y_right = (self.right_color == Color.YELLOW)
+        # Track last seen side to stabilize search/steering
+        if y_left and not y_right:
+            self.yellow_last_seen_side = -1
+        elif y_right and not y_left:
+            self.yellow_last_seen_side = +1
+
+        # Smooth color-based error using continuous yellow scores
+        raw_y_l = self.yellow_score(self.left_color_sensor_information)
+        raw_y_r = self.yellow_score(self.right_color_sensor_information)
+        error = (raw_y_r - raw_y_l) * float(CONSTANTS.get("YELLOW_ERR_SCALE", 50))
+
+        # Timing
+        now = self.clock.time()
+        if not hasattr(self, "y_pid_last_ms"):
+            self.y_pid_last_ms = 0
+            self.y_prev_error = 0.0
+            self.y_error_integral = 0.0
+            self.y_d_err_filtered = 0.0
+        dt = 0.01 if self.y_pid_last_ms == 0 else max(0.001, (now - self.y_pid_last_ms) / 1000.0)
+        self.y_pid_last_ms = now
+
+        # Gains (fallback to black PID values)
+        kp = float(CONSTANTS.get("YELLOW_KP", CONSTANTS.get("LINE_KP", 3.2)))
+        ki = float(CONSTANTS.get("YELLOW_KI", CONSTANTS.get("LINE_KI", 0.02)))
+        kd = float(CONSTANTS.get("YELLOW_KD", CONSTANTS.get("LINE_KD", 18.0)))
+
+        # Integral with clamp
+        self.y_error_integral += error * dt
+        i_max = float(CONSTANTS.get("LINE_I_MAX", 80.0))
+        if self.y_error_integral > i_max:
+            self.y_error_integral = i_max
+        elif self.y_error_integral < -i_max:
+            self.y_error_integral = -i_max
+
+        # Derivative with smoothing
+        raw_d = (error - self.y_prev_error) / dt
+        self.y_prev_error = error
+        alpha = float(CONSTANTS.get("YELLOW_DERIV_ALPHA", 0.2))
+        self.y_d_err_filtered = alpha * raw_d + (1.0 - alpha) * self.y_d_err_filtered
+
+        turn = kp * error + ki * self.y_error_integral + kd * self.y_d_err_filtered
+
+        # Clamp turn
+        max_turn = int(CONSTANTS.get("YELLOW_MAX_TURN_RATE", CONSTANTS.get("LINE_MAX_TURN_RATE", 320)))
+        if turn > max_turn:
+            turn = max_turn
+        elif turn < -max_turn:
+            turn = -max_turn
+
+        # Speed shaping
+        base = int(CONSTANTS.get("YELLOW_BASE_SPEED", CONSTANTS.get("MOVE_SPEED", 170)))
+        min_s = int(CONSTANTS.get("YELLOW_MIN_SPEED", CONSTANTS.get("LINE_MIN_SPEED", 80)))
+        if raw_y_l < 0.1 and raw_y_r < 0.1:
+            # gentle search toward last seen side
+            if getattr(self, "yellow_last_seen_side", 0) != 0 and abs(turn) < max_turn * 0.4:
+                turn = self.yellow_last_seen_side * max(60, int(max_turn * 0.25))
+            speed = max(min_s, int(base * 0.5))
         else:
-            self.move_forward(10, wait=False)
+            err_scale = min(1.0, abs(error) / float(max(1, CONSTANTS.get("CORNER_ERR_THRESHOLD", 13) * 4)))
+            speed = max(min_s, int(base * (1.0 - 0.5 * err_scale)))
+
+        self.drivebase.drive(speed, turn)
+
+        # Exit back to black only when no yellow is present and black confirmed
+        y_exit = float(CONSTANTS.get("YELLOW_EXIT_SCORE", 0.08))
+        if raw_y_l < y_exit and raw_y_r < y_exit:
+            on_black = (self.left_color == Color.BLACK) or (self.right_color == Color.BLACK)
+            if on_black:
+                self.yellow_black_confirm += 1
+            else:
+                self.yellow_black_confirm = 0
+            if self.yellow_black_confirm >= int(CONSTANTS.get("YELLOW_BLACK_CONFIRM", 2)):
+                self.yellow_black_confirm = 0
+                self.shortcut_information["is following shortcut"] = False
+                self.align_to_line_in_place(timeout_ms=1200, err_tol=3)
+                self.robot_state = "line"
+
+    def execute_yellow_shortcut(self, direction):
+        """Perform the deterministic yellow shortcut movement and resume line.
+        direction: 'left' or 'right'
+        Sequence per spec:
+        - Turn 90° onto yellow
+        - Drive forward 200 mm
+        - Turn 90° the opposite way
+        - Drive forward 200 mm
+        - Turn 90° back to align with black
+        """
+        deg = int(CONSTANTS.get("YELLOW_SHORTCUT_TURN_DEG", 90))
+        step = int(CONSTANTS.get("YELLOW_SHORTCUT_STEP_MM", 200))
+        self.stop_motors()
+        if direction == "right":
+            first, second, final = -deg, +deg, -deg
+        else:
+            first, second, final = +deg, -deg, +deg
+        self.sharp_turn_in_degrees(first)
+        self.move_forward(step)
+        self.sharp_turn_in_degrees(second)
+        self.move_forward(step)
+        self.sharp_turn_in_degrees(final)
+        try:
+            self.align_to_line_in_place(timeout_ms=1200, err_tol=4)
+        except Exception:
+            pass
+        self.shortcut_information["is following shortcut"] = False
+        self.robot_state = "line"
 
     def turn_and_detect_ultrasonic(self, degrees=360):
         """Single 360 scan. Returns (min_dist, at_angle)."""
@@ -1172,18 +1316,12 @@ class Robot:
             self.robot_state = "obstacle"
             return
 
-        elif ALLOW_YELLOW and (self.left_color == Color.YELLOW or self.right_color == Color.YELLOW):
-            self.robot_state = "yellow line"
-            if not self.shortcut_information["is following shortcut"]:
-                if self.left_color == Color.YELLOW:
-                    self.turn_in_degrees(-90)
-                    if self.shortcut_information["first turned"] is None:
-                        self.shortcut_information["first turned"] = "left"
-                if self.right_color == Color.YELLOW:
-                    self.turn_in_degrees(90)
-                    if self.shortcut_information["first turned"] is None:
-                        self.shortcut_information["first turned"] = "right"
-            self.shortcut_information["is following shortcut"] = True
+        elif ALLOW_YELLOW and ((self.left_color == Color.YELLOW) ^ (self.right_color == Color.YELLOW)):
+            # Trigger deterministic yellow shortcut movement by side (inverted mapping)
+            if self.left_color == Color.YELLOW:
+                self.robot_state = "yellow-right"
+            else:
+                self.robot_state = "yellow-left"
         
         elif not self.shortcut_information["is following shortcut"] and \
             self.left_color in [Color.WHITE, Color.BLACK, Color.GRAY] and \
@@ -1215,24 +1353,7 @@ class Robot:
         else:
             self.robot_state = "line"
 
-        # Only consider black-crossing turns when actively following a yellow shortcut
-        if self.shortcut_information["is following shortcut"]:
-            if self.left_color == Color.BLACK:
-                self.shortcut_information["left seen black since"] = True
-            if self.right_color == Color.BLACK:
-                self.shortcut_information["right seen black since"] = True
-
-            if (
-                self.shortcut_information["left seen black since"]
-                and self.shortcut_information["right seen black since"]
-            ):
-                first = self.shortcut_information.get("first turned")
-                if first == "left":
-                    self.turn_in_degrees(90)
-                elif first == "right":
-                    self.turn_in_degrees(-90)
-                self.robot_state = "line"
-                self.shortcut_information = self.default_shortcut_information.copy()
+        # Yellow shortcut exit handled in follow_yellow()
 
     def move(self):
         # Announce state transitions with distinct beeps
@@ -1243,8 +1364,10 @@ class Robot:
             self.green_spill_ending()
         elif self.robot_state == "obstacle":
             self.avoid_obstacle()
-        elif self.shortcut_information["is following shortcut"]:
-            self.follow_color()
+        elif self.robot_state == "yellow-left":
+            self.execute_yellow_shortcut("left")
+        elif self.robot_state == "yellow-right":
+            self.execute_yellow_shortcut("right")
         elif self.robot_state == "line":
             self.follow_line()
         elif self.robot_state == "green left":
