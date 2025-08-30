@@ -18,7 +18,8 @@ CONSTANTS = {
     "DEFAULT_TURN_ACCELERATION": 1600,
     "OBSTACLE_MOVE_SPEED": 300,
     "MOVE_SPEED": 170,
-    "ULTRASONIC_THRESHOLD": 50,         # obstacle trigger (mm)
+    "ULTRASONIC_THRESHOLD": 140,        # obstacle trigger (mm) — earlier avoidance
+    "OBSTACLE_DETECT_CONFIRM": 2,       # consecutive reads below threshold to confirm
     "CAN_DETECT_MAX_MM": 600,           # legacy; see CAN_MAX_DISTANCE_MM
     "BLACK_WHEEL_SPEED": 30,
     "TURN_GREEN_DEGREES": 50,
@@ -119,7 +120,12 @@ class Robot:
             CONSTANTS["DRIVEBASE_WHEEL_DIAMETER"],
             CONSTANTS["DRIVEBASE_AXLE_TRACK"]
         )
-        self.drivebase.use_gyro(False)
+        # Enable gyro-based correction for straight driving and turns
+        try:
+            self.drivebase.use_gyro(True)
+        except Exception:
+            # Fallback silently if gyro not available
+            pass
         self.settings_default()
 
         self.robot_state = "obstacle"  # Initial state
@@ -131,6 +137,7 @@ class Robot:
         self.prev_error = 0
         self.corner_hold = 0
         self.line_pivoting = False
+        self._obstacle_below_count = 0
 
         self.shortcut_information = {
             "is following shortcut": False,
@@ -154,6 +161,18 @@ class Robot:
         if d is None:
             return 9999
         return d
+
+    def read_ultra_mm_obstacle(self):
+        """Median-filtered ultrasonic for obstacle detection (no near/far rejection)."""
+        samples = []
+        for _ in range(3):
+            d = self.ultrasonic_sensor.distance()
+            if d is None:
+                d = 9999
+            samples.append(d)
+            wait(2)
+        samples.sort()
+        return samples[1]
 
     def read_ultra_mm_can(self):
         """Ultrasonic read with simple median filter and bounds for can logic."""
@@ -976,27 +995,84 @@ class Robot:
 
         return False
 
+    def align_to_line_in_place(self, timeout_ms=1500, err_tol=3):
+        """Turn in place using PD on sensor reflectance until centered on the line.
+        Does not drive forward to avoid overshooting across the line.
+        """
+        start = self.clock.time()
+        prev_err = 0
+        kp = CONSTANTS.get("LINE_KP", 3.2)
+        kd = 0.0  # keep stable while stationary
+        max_turn = CONSTANTS.get("LINE_MAX_TURN_RATE", 320)
+        while self.clock.time() - start < timeout_ms:
+            self.get_colors()
+            left_ref = self.left_color_sensor_information["reflection"]
+            right_ref = self.right_color_sensor_information["reflection"]
+            error = (left_ref - right_ref) if not self.on_inverted else (right_ref - left_ref)
+            d_err = error - prev_err
+            prev_err = error
+            if abs(error) <= err_tol:
+                break
+            turn_rate = kp * error + kd * d_err
+            if turn_rate > max_turn:
+                turn_rate = max_turn
+            elif turn_rate < -max_turn:
+                turn_rate = -max_turn
+            # rotate in place
+            self.drivebase.drive(0, turn_rate)
+            wait(10)
+        self.drivebase.stop()
+
     def avoid_obstacle(self):
+        # Pause and lift arm to avoid snagging
         self.stop_motors()
         self.rotate_arm(-90)
-        self.sharp_turn_in_degrees(CONSTANTS["OBSTACLE_INITIAL_TURN_DEGREES"])
-        self.drivebase.curve(CONSTANTS["CURVE_RADIUS_OBSTACLE"], -CONSTANTS["OBSTACLE_TURN_DEGREES"], Stop.BRAKE, True)
-        self.start_motors(CONSTANTS["OBSTACLE_MOVE_SPEED"], CONSTANTS["OBSTACLE_MOVE_SPEED"])
 
-        self.get_colors()
+        # Initial bypass turn and large curve around obstacle
+        self.sharp_turn_in_degrees(CONSTANTS["OBSTACLE_INITIAL_TURN_DEGREES"])
+        self.drivebase.curve(
+            CONSTANTS["CURVE_RADIUS_OBSTACLE"],
+            -CONSTANTS["OBSTACLE_TURN_DEGREES"],
+            Stop.BRAKE,
+            True,
+        )
+
+        # Drive forward continuously to search for the line (either sensor sees black)
+        forward_speed = CONSTANTS.get("MOVE_SPEED", 170)
+        timeout_ms = CONSTANTS.get("OBSTACLE_WHITE_TIMEOUT_MS", 2500)
         start_ms = self.clock.time()
-        while self.right_color == Color.WHITE:
-            if self.clock.time() - start_ms > CONSTANTS["OBSTACLE_WHITE_TIMEOUT_MS"]:
-                break
+        self.drivebase.drive(forward_speed, 0)
+        found_line = False
+        while self.clock.time() - start_ms <= timeout_ms:
             self.get_colors()
-        self.turn_in_degrees(CONSTANTS["OBSTACLE_FINAL_TURN_DEGREES"])
-        self.robot_state = "straight"
+            if self.left_color == Color.BLACK or self.right_color == Color.BLACK:
+                found_line = True
+                break
+            wait(5)
+        self.drivebase.stop()
+
+        if not found_line:
+            # We didn't intersect the line while driving: perform a final alignment turn
+            self.turn_in_degrees(CONSTANTS["OBSTACLE_FINAL_TURN_DEGREES"])
+            # Then try oscillation reacquire
+            self.reacquire_line_oscillate(
+                step_deg=CONSTANTS.get("LINE_REACQUIRE_TURN_STEP_DEG", 10),
+                max_deg=CONSTANTS.get("LINE_REACQUIRE_TURN_MAX_DEG", 120),
+                confirm=CONSTANTS.get("LINE_REACQUIRE_CONFIRM", 2),
+            )
+        else:
+            # We hit the line: turn in place to center before resuming to avoid pushing past
+            self.align_to_line_in_place(timeout_ms=1500, err_tol=3)
+
+        # Resume line following
+        self.robot_state = "line"
+        # Schedule arm to come back down later (kept consistent with existing logic)
         self.move_arm_back_after_obstacle_time = self.iteration_count + CONSTANTS["OBSTACLE_ARM_RETURN_DELAY"]
     
     def update(self):
         self.get_colors()
-        # obstacle logic uses the close-range threshold
-        self.ultrasonic = self.ultrasonic_sensor.distance()
+        # Obstacle logic uses a median-filtered distance and a small confirmation window
+        self.ultrasonic = self.read_ultra_mm_obstacle()
         self.log("Ultrasonic distance (mm):", self.ultrasonic)
         # Battery warning (printed once when crossing threshold)
         if not hasattr(self, "_battery_warned"):
@@ -1036,6 +1112,11 @@ class Robot:
             self.on_inverted = False
         
         if self.ultrasonic is not None and self.ultrasonic < CONSTANTS["ULTRASONIC_THRESHOLD"]:
+            self._obstacle_below_count += 1
+        else:
+            self._obstacle_below_count = 0
+        if self._obstacle_below_count >= CONSTANTS.get("OBSTACLE_DETECT_CONFIRM", 2):
+            self._obstacle_below_count = 0
             self.robot_state = "obstacle"
             return
 
@@ -1103,6 +1184,12 @@ class Robot:
         self.battery_display()
         # Reset arm position if needed using a valid stop method
         self.rotate_arm(180, Stop.COAST)
+        # Try to standardize heading at start for consistent gyro behavior
+        try:
+            # On flat surface, this helps align IMU heading to 0
+            self.hub.imu.reset_heading(0)
+        except Exception:
+            pass
         while True:
             self.iteration_count += 1
             self.update()
