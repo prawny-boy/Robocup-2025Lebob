@@ -16,11 +16,9 @@ CONSTANTS = {
     "DEFAULT_ACCELERATION": 600,
     "DEFAULT_TURN_RATE": 150,
     "DEFAULT_TURN_ACCELERATION": 1600,
-    "OBSTACLE_MOVE_SPEED": 300,
     "MOVE_SPEED": 170,
     "ULTRASONIC_THRESHOLD": 140,        # obstacle trigger (mm) - earlier avoidance
-    "OBSTACLE_DETECT_CONFIRM": 2,       # consecutive reads below threshold to confirm
-    "CAN_DETECT_MAX_MM": 600,           # legacy; see CAN_MAX_DISTANCE_MM
+    "OBSTACLE_DETECT_CONFIRM": 4,       # consecutive reads below threshold to confirm (reduce false triggers)
     "BLACK_WHEEL_SPEED": 30,
     "TURN_GREEN_DEGREES": 50,
     "BACK_AFTER_GREEN_TURN_DISTANCE": 6,
@@ -32,9 +30,7 @@ CONSTANTS = {
     "OBSTACLE_FINAL_TURN_DEGREES": 70,
     "OBSTACLE_ARM_RETURN_DELAY": 3000,
     "CURVE_RADIUS_LINE_FOLLOW": 4,
-    "MAX_TURN_RATE": 150,
     "BLACK_COUNTER_THRESHOLD": 100,
-    "TURNING_WITH_WEIGHT_CORRECITON_MULTIPLIER": 1.03,
     # Timeout (ms) to avoid getting stuck while leaving white during obstacle bypass
     "OBSTACLE_WHITE_TIMEOUT_MS": 2500,
     # Line follow tuning (PD + safety)
@@ -43,21 +39,16 @@ CONSTANTS = {
     "LINE_MIN_SPEED": 80,
     "LINE_MAX_TURN_RATE": 320,
     "CORNER_ERR_THRESHOLD": 25,     # reflectance delta that indicates a sharp corner
-    "CORNER_PIVOT_DEG": 14,          # quick pivot to catch 90° turns
-    "CORNER_CONFIRM_CYCLES": 2,
     # Can scanning/approach tuning
     "CAN_DEBUG_PRINT": False,           # disable debug printing in can routines
     "CAN_SWEEP_TURN_RATE": 120,        # deg/s used for the initial 360° can sweep
     "CAN_SWEEP_TURN_RATE_SLOW": 60,    # deg/s used after two failed 360 sweeps
-    "CAN_MAX_DISTANCE_MM": 350,         # maximum valid can distance for detection/approach
     "CAN_SCAN_MAX_MM": 350,             # default scan threshold (<= this is "seen")
     "CAN_FIRST_HIT_MAX_MM": 550,        # permissive threshold for first detection during 360
     "CAN_EDGE_MARGIN_MM": 120,          # margin above first-hit distance to keep the object in sweeps
     "CAN_IGNORE_ABOVE_MM": 1800,        # treat readings above this as no target (environmental)
     "CAN_MIN_VALID_MM": 60,             # ignore too-close returns (sensor near-field)
-    "CAN_US_MEDIAN_SAMPLES": 3,         # median filter samples for ultrasonic in can logic
-    "CAN_CREEP_STEP_MM": 60,            # step size when creeping forward to find can
-    "CAN_CREEP_MAX_STEPS": 6,           # max creep steps before giving up
+    "CAN_US_MEDIAN_SAMPLES": 5,         # median filter samples for ultrasonic in can logic
     # Micro-oscillation scan tuning
     "CAN_OSC_AMP_DEG": 12,              # oscillation amplitude (+/- degrees)
     "CAN_OSC_PASSES": 3,                # number of back-and-forth passes
@@ -71,7 +62,6 @@ CONSTANTS = {
     "LINE_REACQUIRE_TURN_STEP_DEG": 10,
     "LINE_REACQUIRE_TURN_MAX_DEG": 120,
     "CAN_SEGMENT_MIN_POINTS": 4,
-    "CAN_REFINE_SWEEP_DEG": 12,
     # Push off spill + exit spill tuning
     "CAN_PUSH_STEP_MM": 20,
     "CAN_PUSH_CONFIRM": 4,
@@ -87,7 +77,6 @@ CONSTANTS = {
     "BATTERY_STATUS_INTERVAL_MS": 30000,
     # Behavior toggles
     "SOUNDS_ENABLED": True,             # control state-change beeps
-    "REQUIRE_START_BUTTON": True,       # wait for RIGHT button before starting loop
     "TREAT_GRAY_AS_SPILL": False,       # if True, treat both-sensor GRAY as spill entry
     "ENABLE_INVERTED_MODE": False,      # auto-switch follow_line error sign on inverted tracks
     # Green spill detection stability
@@ -96,10 +85,7 @@ CONSTANTS = {
     "SPILL_RETRY_COOLDOWN_MS": 1200,    # initial cooldown after a failed turn_green
 }
 
-# Preferred corrected key; keep legacy key for backward compatibility
-CONSTANTS["TURNING_WITH_WEIGHT_CORRECTION_MULTIPLIER"] = CONSTANTS.get(
-    "TURNING_WITH_WEIGHT_CORRECITON_MULTIPLIER", 1.03
-)
+ 
 
 ports = {
     "left_drive": Port.E,
@@ -451,7 +437,7 @@ class Robot:
         turn_rate = kp * error + kd * d_err
 
         # Clamp turn rate
-        max_turn = CONSTANTS["LINE_MAX_TURN_RATE"]
+        max_turn = CONSTANTS.get("LINE_MAX_TURN_RATE", 320)
         if turn_rate > max_turn:
             turn_rate = max_turn
         elif turn_rate < -max_turn:
@@ -1103,29 +1089,54 @@ class Robot:
             True,
         )
 
-        # Drive forward continuously to search for the line (either sensor sees black)
-        forward_speed = CONSTANTS.get("MOVE_SPEED", 170)
-        timeout_ms = CONSTANTS.get("OBSTACLE_WHITE_TIMEOUT_MS", 2500)
-        start_ms = self.clock.time()
-        self.drivebase.drive(forward_speed, 0)
+        # Step forward in small increments to search for the line and avoid overshoot
+        step_mm = max(10, int(CONSTANTS.get("LINE_REACQUIRE_STEP_MM", 15)))
+        max_mm = int(CONSTANTS.get("LINE_REACQUIRE_MAX_MM", 400))
+        moved = 0
         found_line = False
-        while self.clock.time() - start_ms <= timeout_ms:
+        while moved < max_mm:
+            # Move a small step, then sample sensors at rest for reliable detection
+            self.move_forward(step_mm)
+            moved += step_mm
             self.get_colors()
             if self.left_color == Color.BLACK or self.right_color == Color.BLACK:
                 found_line = True
                 break
-            wait(5)
-        self.drivebase.stop()
 
         if not found_line:
             # We didn't intersect the line while driving: perform a final alignment turn
             self.turn_in_degrees(CONSTANTS["OBSTACLE_FINAL_TURN_DEGREES"])
-            # Then try oscillation reacquire
-            self.reacquire_line_oscillate(
+            # Try oscillation reacquire; if it fails, creep-scan forward/back
+            found = self.reacquire_line_oscillate(
                 step_deg=CONSTANTS.get("LINE_REACQUIRE_TURN_STEP_DEG", 10),
                 max_deg=CONSTANTS.get("LINE_REACQUIRE_TURN_MAX_DEG", 120),
                 confirm=CONSTANTS.get("LINE_REACQUIRE_CONFIRM", 2),
             )
+            if not found:
+                # Creep forward in small steps, checking for line and re-trying oscillation
+                for _ in range(int(CONSTANTS.get("LINE_REACQUIRE_MAX_MM", 400) // max(10, CONSTANTS.get("LINE_REACQUIRE_STEP_MM", 15)))):
+                    self.move_forward(CONSTANTS.get("LINE_REACQUIRE_STEP_MM", 15))
+                    self.get_colors()
+                    if self.left_color == Color.BLACK or self.right_color == Color.BLACK:
+                        self.align_to_line_in_place(timeout_ms=1500, err_tol=3)
+                        found = True
+                        break
+                    # brief oscillation check at new spot
+                    found = self.reacquire_line_oscillate(
+                        step_deg=CONSTANTS.get("LINE_REACQUIRE_TURN_STEP_DEG", 10),
+                        max_deg=CONSTANTS.get("LINE_REACQUIRE_TURN_MAX_DEG", 120),
+                        confirm=CONSTANTS.get("LINE_REACQUIRE_CONFIRM", 2),
+                    )
+                    if found:
+                        break
+                if not found:
+                    # As a last resort, backtrack a bit and try once more
+                    self.move_forward(-CONSTANTS.get("LINE_REACQUIRE_BACK_MM", 50))
+                    self.reacquire_line_oscillate(
+                        step_deg=CONSTANTS.get("LINE_REACQUIRE_TURN_STEP_DEG", 10),
+                        max_deg=CONSTANTS.get("LINE_REACQUIRE_TURN_MAX_DEG", 120),
+                        confirm=CONSTANTS.get("LINE_REACQUIRE_CONFIRM", 2),
+                    )
         else:
             # We hit the line: turn in place to center before resuming to avoid pushing past
             self.align_to_line_in_place(timeout_ms=1500, err_tol=3)
@@ -1155,7 +1166,7 @@ class Robot:
             if (pct < CONSTANTS.get("BATTERY_WARN_PERCENT", 75)) and (not self._battery_warned):
                 print("WARNING: Battery low:", f"{pct}%", f"({volts:.2f} V)")
                 self._battery_warned = True
-        self.previous_state = self.robot_state
+        # previous_state is updated after move() executes
 
         # Timed arm return after obstacle
         if self.move_arm_back_after_obstacle_time is not None:
@@ -1163,7 +1174,10 @@ class Robot:
                 self.move_arm_back_after_obstacle_time = None
                 self.rotate_arm(90, stop_method=Stop.COAST)
 
-        if (self.left_color == Color.GRAY and self.right_color == Color.GRAY) or (self.left_color == Color.GREEN and self.right_color == Color.GREEN):
+        # Enter spill only when both GREEN (or both GRAY if explicitly enabled)
+        both_green = (self.left_color == Color.GREEN and self.right_color == Color.GREEN)
+        both_gray = (self.left_color == Color.GRAY and self.right_color == Color.GRAY)
+        if both_green or (CONSTANTS.get("TREAT_GRAY_AS_SPILL", False) and both_gray):
             self.robot_state = "gray"
             return
         
@@ -1230,18 +1244,24 @@ class Robot:
         else:
             self.robot_state = "line"
 
-        if self.left_color == Color.BLACK:
-            self.shortcut_information["left seen black since"] = True
-        if self.right_color == Color.BLACK:
-            self.shortcut_information["right seen black since"] = True
+        # Only consider black-crossing turns when actively following a yellow shortcut
+        if self.shortcut_information["is following shortcut"]:
+            if self.left_color == Color.BLACK:
+                self.shortcut_information["left seen black since"] = True
+            if self.right_color == Color.BLACK:
+                self.shortcut_information["right seen black since"] = True
 
-        if self.shortcut_information["left seen black since"] and self.shortcut_information["right seen black since"]:
-            if self.shortcut_information["first turned"] == "left":
-                self.turn_in_degrees(90)
-            else:
-                self.turn_in_degrees(-90)
-            self.robot_state = "line"
-            self.shortcut_information = self.default_shortcut_information.copy()
+            if (
+                self.shortcut_information["left seen black since"]
+                and self.shortcut_information["right seen black since"]
+            ):
+                first = self.shortcut_information.get("first turned")
+                if first == "left":
+                    self.turn_in_degrees(90)
+                elif first == "right":
+                    self.turn_in_degrees(-90)
+                self.robot_state = "line"
+                self.shortcut_information = self.default_shortcut_information.copy()
 
     def move(self):
         # Announce state transitions with distinct beeps
