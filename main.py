@@ -24,7 +24,7 @@ CONSTANTS = {
     "BACK_AFTER_GREEN_TURN_DISTANCE": 6,
     "TURN_YELLOW_DEGREES": 20,
     "CURVE_RADIUS_GREEN": 78,
-    "CURVE_RADIUS_OBSTACLE": 130,
+    "CURVE_RADIUS_OBSTACLE": 160,
     "OBSTACLE_TURN_DEGREES": 175,
     "OBSTACLE_INITIAL_TURN_DEGREES": 90,
     "OBSTACLE_FINAL_TURN_DEGREES": 70,
@@ -59,6 +59,8 @@ CONSTANTS = {
     "LINE_REACQUIRE_CONFIRM": 2,
     "LINE_REACQUIRE_MAX_MM": 400,
     "LINE_REACQUIRE_BACK_MM": 50,
+    # Robust line detection threshold (reflection) for reacquire
+    "LINE_BLACK_REF_THRESHOLD": 35,
     "LINE_REACQUIRE_TURN_STEP_DEG": 10,
     "LINE_REACQUIRE_TURN_MAX_DEG": 120,
     "CAN_SEGMENT_MIN_POINTS": 4,
@@ -83,6 +85,8 @@ CONSTANTS = {
     "GREEN_DETECT_CONFIRM": 3,          # cycles before entering green-left/right state
     "SPILL_ENTRY_CONFIRM": 3,           # consecutive reads to confirm in-spill during turn
     "SPILL_RETRY_COOLDOWN_MS": 1200,    # initial cooldown after a failed turn_green
+    # Obstacle reacquire guard
+    "OBSTACLE_REACQUIRE_MAX_MM": 220,    # hard cap forward travel while searching for line
 }
 
  
@@ -1089,56 +1093,23 @@ class Robot:
             True,
         )
 
-        # Step forward in small increments to search for the line and avoid overshoot
-        step_mm = max(10, int(CONSTANTS.get("LINE_REACQUIRE_STEP_MM", 15)))
-        max_mm = int(CONSTANTS.get("LINE_REACQUIRE_MAX_MM", 400))
-        moved = 0
-        found_line = False
-        while moved < max_mm:
-            # Move a small step, then sample sensors at rest for reliable detection
-            self.move_forward(step_mm)
-            moved += step_mm
-            self.get_colors()
-            if self.left_color == Color.BLACK or self.right_color == Color.BLACK:
-                found_line = True
-                break
-
-        if not found_line:
-            # We didn't intersect the line while driving: perform a final alignment turn
+        # Stop after the avoidance arc, then reacquire by turning in place only (no forward motion)
+        self.drivebase.stop()
+        found = self.reacquire_line_oscillate(
+            step_deg=CONSTANTS.get("LINE_REACQUIRE_TURN_STEP_DEG", 10),
+            max_deg=CONSTANTS.get("LINE_REACQUIRE_TURN_MAX_DEG", 120),
+            confirm=CONSTANTS.get("LINE_REACQUIRE_CONFIRM", 2),
+        )
+        if not found:
+            # Bias a final turn inward and try once more, still without moving forward
             self.turn_in_degrees(CONSTANTS["OBSTACLE_FINAL_TURN_DEGREES"])
-            # Try oscillation reacquire; if it fails, creep-scan forward/back
             found = self.reacquire_line_oscillate(
                 step_deg=CONSTANTS.get("LINE_REACQUIRE_TURN_STEP_DEG", 10),
                 max_deg=CONSTANTS.get("LINE_REACQUIRE_TURN_MAX_DEG", 120),
                 confirm=CONSTANTS.get("LINE_REACQUIRE_CONFIRM", 2),
             )
-            if not found:
-                # Creep forward in small steps, checking for line and re-trying oscillation
-                for _ in range(int(CONSTANTS.get("LINE_REACQUIRE_MAX_MM", 400) // max(10, CONSTANTS.get("LINE_REACQUIRE_STEP_MM", 15)))):
-                    self.move_forward(CONSTANTS.get("LINE_REACQUIRE_STEP_MM", 15))
-                    self.get_colors()
-                    if self.left_color == Color.BLACK or self.right_color == Color.BLACK:
-                        self.align_to_line_in_place(timeout_ms=1500, err_tol=3)
-                        found = True
-                        break
-                    # brief oscillation check at new spot
-                    found = self.reacquire_line_oscillate(
-                        step_deg=CONSTANTS.get("LINE_REACQUIRE_TURN_STEP_DEG", 10),
-                        max_deg=CONSTANTS.get("LINE_REACQUIRE_TURN_MAX_DEG", 120),
-                        confirm=CONSTANTS.get("LINE_REACQUIRE_CONFIRM", 2),
-                    )
-                    if found:
-                        break
-                if not found:
-                    # As a last resort, backtrack a bit and try once more
-                    self.move_forward(-CONSTANTS.get("LINE_REACQUIRE_BACK_MM", 50))
-                    self.reacquire_line_oscillate(
-                        step_deg=CONSTANTS.get("LINE_REACQUIRE_TURN_STEP_DEG", 10),
-                        max_deg=CONSTANTS.get("LINE_REACQUIRE_TURN_MAX_DEG", 120),
-                        confirm=CONSTANTS.get("LINE_REACQUIRE_CONFIRM", 2),
-                    )
-        else:
-            # We hit the line: turn in place to center before resuming to avoid pushing past
+        # If we located the line, center on it before resuming
+        if found:
             self.align_to_line_in_place(timeout_ms=1500, err_tol=3)
 
         # Resume line following
