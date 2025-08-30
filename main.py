@@ -18,7 +18,7 @@ CONSTANTS = {
     "DEFAULT_TURN_ACCELERATION": 1600,
     "OBSTACLE_MOVE_SPEED": 300,
     "MOVE_SPEED": 170,
-    "ULTRASONIC_THRESHOLD": 140,        # obstacle trigger (mm) — earlier avoidance
+    "ULTRASONIC_THRESHOLD": 140,        # obstacle trigger (mm) - earlier avoidance
     "OBSTACLE_DETECT_CONFIRM": 2,       # consecutive reads below threshold to confirm
     "CAN_DETECT_MAX_MM": 600,           # legacy; see CAN_MAX_DISTANCE_MM
     "BLACK_WHEEL_SPEED": 30,
@@ -46,7 +46,7 @@ CONSTANTS = {
     "CORNER_PIVOT_DEG": 14,          # quick pivot to catch 90° turns
     "CORNER_CONFIRM_CYCLES": 2,
     # Can scanning/approach tuning
-    "CAN_DEBUG_PRINT": True,            # print ultrasonic during can routines for troubleshooting
+    "CAN_DEBUG_PRINT": False,           # disable debug printing in can routines
     "CAN_SWEEP_TURN_RATE": 120,        # deg/s used for the initial 360° can sweep
     "CAN_SWEEP_TURN_RATE_SLOW": 60,    # deg/s used after two failed 360 sweeps
     "CAN_MAX_DISTANCE_MM": 350,         # maximum valid can distance for detection/approach
@@ -132,7 +132,8 @@ class Robot:
         self.iteration_count = 0
         self.black_counter = 0
         self.on_inverted = False
-        self.move_arm_back_after_obstacle_time = False
+        # Schedule (ms since start) for arm to return after obstacle; None when not scheduled
+        self.move_arm_back_after_obstacle_time = None
         self.debug_enabled = False  # toggle prints on hub
         self.prev_error = 0
         self.corner_hold = 0
@@ -156,7 +157,7 @@ class Robot:
 
     # --- helpers ---
     def read_ultra_mm(self):
-        """Raw ultrasonic reading in mm; returns 9999 if no valid target."""
+        """Raw ultrasonic distance in mm; returns 9999 if no valid target."""
         d = self.ultrasonic_sensor.distance()
         if d is None:
             return 9999
@@ -175,7 +176,7 @@ class Robot:
         return samples[1]
 
     def read_ultra_mm_can(self):
-        """Ultrasonic read with simple median filter and bounds for can logic."""
+        """Ultrasonic read with median filter and bounds for can logic."""
         samples = []
         for _ in range(CONSTANTS.get("CAN_US_MEDIAN_SAMPLES", 3)):
             d = self.ultrasonic_sensor.distance()
@@ -230,18 +231,43 @@ class Robot:
         print("Battery:", f"{pct}%", f"({volts:.2f} V)" + warn)
     
     def turn_in_degrees(self, degrees, wait=False):
-        """Turn in degrees with curve."""
+        """Turn by a small angle using a gentle curve."""
         self.drivebase.curve(CONSTANTS["CURVE_RADIUS_LINE_FOLLOW"], degrees, Stop.COAST, wait)
 
     def sharp_turn_in_degrees(self, degrees, wait=True):
-        """Sharp turn."""
+        """Perform an in-place sharp turn by the given angle in degrees."""
         self.drivebase.turn(degrees, wait=wait)
 
     def move_forward(self, distance, speed=None, wait=True):
-        """Move straight in mm."""
+        """Move straight by the given distance in mm."""
         if speed is not None:
             self.set_speed(speed)
         self.drivebase.straight(distance, wait=wait)
+
+    # --- Sounds ---
+    def announce_state(self, state):
+        """Play a short, distinct beep pattern for each state start."""
+        sp = self.hub.speaker
+        try:
+            if state == "line":
+                sp.beep(700, 60)
+            elif state == "obstacle":
+                sp.beep(350, 90); wait(40); sp.beep(350, 90)
+            elif state == "gray":
+                sp.beep(900, 80); wait(40); sp.beep(1100, 80)
+            elif state == "yellow line":
+                sp.beep(1200, 60); wait(30); sp.beep(1200, 60); wait(30); sp.beep(1200, 60)
+            elif state == "green left":
+                sp.beep(1000, 70)
+            elif state == "green right":
+                sp.beep(600, 70)
+            elif state == "stop":
+                sp.beep(250, 200)
+            else:
+                sp.beep(500, 50)
+        except Exception:
+            # If speaker not available or busy, ignore
+            pass
 
     # --- Recording helpers for can routine ---
     def can_start_recording(self):
@@ -1066,14 +1092,14 @@ class Robot:
 
         # Resume line following
         self.robot_state = "line"
-        # Schedule arm to come back down later (kept consistent with existing logic)
-        self.move_arm_back_after_obstacle_time = self.iteration_count + CONSTANTS["OBSTACLE_ARM_RETURN_DELAY"]
+        # Schedule arm to come back down later using clock time (ms)
+        self.move_arm_back_after_obstacle_time = self.clock.time() + CONSTANTS["OBSTACLE_ARM_RETURN_DELAY"]
     
     def update(self):
         self.get_colors()
         # Obstacle logic uses a median-filtered distance and a small confirmation window
         self.ultrasonic = self.read_ultra_mm_obstacle()
-        self.log("Ultrasonic distance (mm):", self.ultrasonic)
+        # Debug ultrasonic print removed
         # Battery warning (printed once when crossing threshold)
         if not hasattr(self, "_battery_warned"):
             self._battery_warned = False
@@ -1091,9 +1117,10 @@ class Robot:
                 self._battery_warned = True
         self.previous_state = self.robot_state
 
-        if self.move_arm_back_after_obstacle_time != False:
-            if self.iteration_count > self.move_arm_back_after_obstacle_time:
-                self.move_arm_back_after_obstacle_time = False
+        # Timed arm return after obstacle
+        if self.move_arm_back_after_obstacle_time is not None:
+            if self.clock.time() >= self.move_arm_back_after_obstacle_time:
+                self.move_arm_back_after_obstacle_time = None
                 self.rotate_arm(90, stop_method=Stop.COAST)
 
         if (self.left_color == Color.GRAY and self.right_color == Color.GRAY) or (self.left_color == Color.GREEN and self.right_color == Color.GREEN):
@@ -1160,6 +1187,10 @@ class Robot:
             self.shortcut_information = self.default_shortcut_information.copy()
 
     def move(self):
+        # Announce state transitions with distinct beeps
+        if self.robot_state != self.previous_state:
+            self.announce_state(self.robot_state)
+
         if self.robot_state == "gray":
             self.green_spill_ending()
         elif self.robot_state == "obstacle":
@@ -1177,7 +1208,11 @@ class Robot:
         elif self.robot_state == "stop":
             self.stop_motors()
 
+        # Record this state as the last seen
+        self.previous_state = self.robot_state
+
     def debug(self):
+        # No debug printing per request
         pass
 
     def run(self):
@@ -1198,6 +1233,15 @@ class Robot:
 
 def main():
     robot = Robot()
-    robot.run()
+    try:
+        robot.run()
+    finally:
+        # Always stop motors on exit/error to avoid runaway
+        try:
+            robot.stop_motors()
+        except Exception:
+            pass
 
-main()
+
+if __name__ == "__main__":
+    main()
