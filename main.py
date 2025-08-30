@@ -16,7 +16,7 @@ CONSTANTS = {
     "DEFAULT_ACCELERATION": 600,
     "DEFAULT_TURN_RATE": 150,
     "DEFAULT_TURN_ACCELERATION": 1600,
-    "MOVE_SPEED": 170,
+    "MOVE_SPEED": 120,
     "ULTRASONIC_THRESHOLD": 140,        # obstacle trigger (mm) - earlier avoidance
     "OBSTACLE_DETECT_CONFIRM": 4,       # consecutive reads below threshold to confirm (reduce false triggers)
     "BLACK_WHEEL_SPEED": 30,
@@ -34,7 +34,7 @@ CONSTANTS = {
     # Timeout (ms) to avoid getting stuck while leaving white during obstacle bypass
     "OBSTACLE_WHITE_TIMEOUT_MS": 2500,
     # Line follow tuning (PD + safety)
-    "LINE_KP": 3.2,
+    "LINE_KP": 3.0,
     "LINE_KD": 18.0,
     "LINE_MIN_SPEED": 80,
     "LINE_MAX_TURN_RATE": 320,
