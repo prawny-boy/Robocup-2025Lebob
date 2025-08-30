@@ -12,12 +12,12 @@ CONSTANTS = {
     "DRIVEBASE_WHEEL_DIAMETER": 56,
     "DRIVEBASE_AXLE_TRACK": 112,
     "ARM_MOVE_SPEED": 500,
-    "DEFAULT_SPEED": 240,
-    "DEFAULT_ACCELERATION": 1000,
+    "DEFAULT_SPEED": 170,
+    "DEFAULT_ACCELERATION": 600,
     "DEFAULT_TURN_RATE": 150,
-    "DEFAULT_TURN_ACCELERATION": 2800,
+    "DEFAULT_TURN_ACCELERATION": 1600,
     "OBSTACLE_MOVE_SPEED": 300,
-    "MOVE_SPEED": 240,
+    "MOVE_SPEED": 170,
     "ULTRASONIC_THRESHOLD": 50,         # obstacle trigger (mm)
     "CAN_DETECT_MAX_MM": 600,           # legacy; see CAN_MAX_DISTANCE_MM
     "BLACK_WHEEL_SPEED": 30,
@@ -37,18 +37,15 @@ CONSTANTS = {
     # Timeout (ms) to avoid getting stuck while leaving white during obstacle bypass
     "OBSTACLE_WHITE_TIMEOUT_MS": 2500,
     # Line follow tuning (PD + safety)
-    "LINE_KP": 3.0,
-    "LINE_KD": 24.0,
-    "LINE_MIN_SPEED": 120,
-    "LINE_MAX_TURN_RATE": 480,
-    "LINE_SPEED_GAMMA": 2.0,
-    "TURN_SLEW_DELTA": 120,            # deg/s per loop (slew limit)
-    "SPEED_SLEW_DELTA": 40,            # mm/s per loop (slew limit)
+    "LINE_KP": 3.2,
+    "LINE_KD": 18.0,
+    "LINE_MIN_SPEED": 80,
+    "LINE_MAX_TURN_RATE": 320,
     "CORNER_ERR_THRESHOLD": 25,     # reflectance delta that indicates a sharp corner
     "CORNER_PIVOT_DEG": 14,          # quick pivot to catch 90° turns
     "CORNER_CONFIRM_CYCLES": 2,
     # Can scanning/approach tuning
-    "CAN_DEBUG_PRINT": False,           # set to True for troubleshooting
+    "CAN_DEBUG_PRINT": True,            # print ultrasonic during can routines for troubleshooting
     "CAN_SWEEP_TURN_RATE": 120,        # deg/s used for the initial 360° can sweep
     "CAN_SWEEP_TURN_RATE_SLOW": 60,    # deg/s used after two failed 360 sweeps
     "CAN_MAX_DISTANCE_MM": 350,         # maximum valid can distance for detection/approach
@@ -129,8 +126,6 @@ class Robot:
         self.prev_error = 0
         self.corner_hold = 0
         self.line_pivoting = False
-        self.prev_turn_rate_cmd = 0
-        self.prev_speed_cmd = CONSTANTS["MOVE_SPEED"]
 
         self.shortcut_information = {
             "is following shortcut": False,
@@ -341,7 +336,7 @@ class Robot:
             self.move_forward(-CONSTANTS["BACK_AFTER_GREEN_TURN_DISTANCE"])
 
     def follow_line(self):
-        # Simple PD line follow with dynamic speed and slew limiting
+        # Simple PD line follow with dynamic slowdown; no blocking, no pivots
         left_ref = self.left_color_sensor_information["reflection"]
         right_ref = self.right_color_sensor_information["reflection"]
 
@@ -360,37 +355,12 @@ class Robot:
         elif turn_rate < -max_turn:
             turn_rate = -max_turn
 
-        # Dynamic speed: gamma curve based on normalized error
+        # Slow down slightly with larger error to make tight corners
+        err_scale = min(1.0, abs(error) / max(1, CONSTANTS["CORNER_ERR_THRESHOLD"]))
         base_speed = CONSTANTS["MOVE_SPEED"]
-        err_ref = max(1, CONSTANTS["CORNER_ERR_THRESHOLD"])  # reference scale
-        norm = min(1.0, abs(error) / err_ref)
-        gamma = CONSTANTS.get("LINE_SPEED_GAMMA", 2.0)
-        slow_factor = norm ** gamma  # 0 on straight, towards 1 on large error
-        target_speed = int(base_speed * (1.0 - 0.6 * slow_factor))
-        if target_speed < CONSTANTS["LINE_MIN_SPEED"]:
-            target_speed = CONSTANTS["LINE_MIN_SPEED"]
+        speed = max(CONSTANTS["LINE_MIN_SPEED"], int(base_speed * (1 - 0.4 * err_scale)))
 
-        # Slew-limit speed and turn rate per loop
-        s_slew = CONSTANTS.get("SPEED_SLEW_DELTA", 40)
-        t_slew = CONSTANTS.get("TURN_SLEW_DELTA", 120)
-        # speed slew
-        if target_speed > self.prev_speed_cmd + s_slew:
-            cmd_speed = self.prev_speed_cmd + s_slew
-        elif target_speed < self.prev_speed_cmd - s_slew:
-            cmd_speed = self.prev_speed_cmd - s_slew
-        else:
-            cmd_speed = target_speed
-        self.prev_speed_cmd = cmd_speed
-        # turn slew
-        if turn_rate > self.prev_turn_rate_cmd + t_slew:
-            cmd_turn = self.prev_turn_rate_cmd + t_slew
-        elif turn_rate < self.prev_turn_rate_cmd - t_slew:
-            cmd_turn = self.prev_turn_rate_cmd - t_slew
-        else:
-            cmd_turn = turn_rate
-        self.prev_turn_rate_cmd = cmd_turn
-
-        self.drivebase.drive(cmd_speed, cmd_turn)
+        self.drivebase.drive(speed, turn_rate)
     
     def follow_color(self, color_to_follow=Color.YELLOW):
         if self.left_color == color_to_follow:
