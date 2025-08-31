@@ -60,10 +60,19 @@ def compute_trim(delta_heading_deg: float, duration_ms: int, speed_deg_s: int,
     return round(TL, 3), round(TR, 3)
 
 
-def print_constants_block(left_trim: float, right_trim: float):
+def compute_straight_turn_trim(delta_heading_deg: float, duration_ms: int):
+    """Return the deg/s turn offset that cancels the observed drift.
+    If robot ended with +delta deg to the left after t seconds, use -delta/t deg/s.
+    """
+    t = max(0.01, duration_ms / 1000.0)
+    return round(-(delta_heading_deg / t), 2)
+
+
+def print_constants_block(left_trim: float, right_trim: float, straight_turn_trim: float):
     print("\n=== Suggested motor trim (paste into CONSTANTS in main.py) ===")
     print(f'    "LEFT_MOTOR_TRIM": {left_trim},')
     print(f'    "RIGHT_MOTOR_TRIM": {right_trim},')
+    print(f'    "STRAIGHT_TURN_TRIM": {straight_turn_trim},')
 
 
 def main():
@@ -110,11 +119,11 @@ def main():
         if btn == Button.LEFT:
             LT, RT = compute_trim(delta, TEST_DURATION_MS, TEST_SPEED_DEG_S,
                                    WHEEL_DIAMETER_MM, AXLE_TRACK_MM)
-            print_constants_block(LT, RT)
+            STT = compute_straight_turn_trim(delta, TEST_DURATION_MS)
+            print_constants_block(LT, RT, STT)
             beep_ok(hub)
             break
 
 
 if __name__ == "__main__":
     main()
-

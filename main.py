@@ -93,6 +93,12 @@ CONSTANTS = {
     # Yellow shortcut (deterministic sequence)
     "YELLOW_SHORTCUT_TURN_DEG": 90,
     "YELLOW_SHORTCUT_STEP_MM": 200,
+    # Gyro/IMU behavior
+    "GYRO_ENABLED": True,            # toggle gyro-based straight/turn correction
+    "IMU_STABILIZE_MS": 1200,        # wait at startup (ms) if gyro is enabled
+    # Straight-drive trim (deg/s). Positive steers left; negative steers right.
+    # Use small values like -6..+6 to cancel residual bias when using manual straight.
+    "STRAIGHT_TURN_TRIM": -100,
     # Optional color calibration overrides (used if present)
     # Gray
     "GRAY_REFLECTION_MIN": 60,
@@ -139,11 +145,29 @@ class Robot:
             CONSTANTS["DRIVEBASE_AXLE_TRACK"]
         )
         # Enable gyro-based correction for straight driving and turns
-        try:
-            self.drivebase.use_gyro(True)
-        except Exception:
-            # Fallback silently if gyro not available
-            pass
+        self.gyro_ok = False
+        if CONSTANTS.get("GYRO_ENABLED", True):
+            # Keep robot still while stabilizing; then zero heading and enable gyro
+            try:
+                wait(int(CONSTANTS.get("IMU_STABILIZE_MS", 800)))
+                try:
+                    self.hub.imu.reset_heading(0)
+                except Exception:
+                    pass
+                self.drivebase.use_gyro(True)
+                self.gyro_ok = True
+            except Exception:
+                # Fallback silently if gyro not available
+                try:
+                    self.drivebase.use_gyro(False)
+                except Exception:
+                    pass
+                self.gyro_ok = False
+        else:
+            try:
+                self.drivebase.use_gyro(False)
+            except Exception:
+                pass
         self.settings_default()
 
         self.robot_state = "obstacle"  # Initial state
@@ -273,7 +297,39 @@ class Robot:
         """Move straight by the given distance in mm."""
         if speed is not None:
             self.set_speed(speed)
-        self.drivebase.straight(distance, wait=wait)
+        trim = float(CONSTANTS.get("STRAIGHT_TURN_TRIM", 0.0))
+        # If no trim requested and gyro is active, use built-in straight
+        if abs(trim) < 1e-3 and getattr(self, "gyro_ok", False):
+            self.drivebase.straight(distance, wait=wait)
+            return
+        # Otherwise, emulate a straight with constant turn trim to compensate bias
+        try:
+            self.drivebase.reset()
+        except Exception:
+            pass
+        target = float(distance)
+        direction = 1 if target >= 0 else -1
+        # Determine speed (mm/s) with correct sign
+        try:
+            ss, _, _, _ = self.drivebase.settings()
+        except Exception:
+            ss = int(CONSTANTS.get("DEFAULT_SPEED", 150))
+        mm_s = int(ss if speed is None else speed) * direction
+        # Drive until target distance reached
+        self.drivebase.drive(mm_s, trim)
+        if wait:
+            while True:
+                try:
+                    d = self.drivebase.distance()
+                except Exception:
+                    d = 0.0
+                if (direction > 0 and d >= target) or (direction < 0 and d <= target):
+                    break
+                try:
+                    wait(10)
+                except Exception:
+                    pass
+            self.drivebase.stop()
 
     # --- Sounds ---
     def announce_state(self, state):  # sourcery skip: use-contextlib-suppress
@@ -444,9 +500,10 @@ class Robot:
         self.right_color = self.information_to_color(self.right_color_sensor_information)
 
     def both_black_slow(self):
-        # Use drivebase + gyro to keep heading strictly straight
+        # Use drivebase to keep heading straight; apply trim if set
         speed_mm_s = int(CONSTANTS.get("BLACK_DRIVE_SPEED", CONSTANTS.get("BLACK_WHEEL_SPEED", 30)))
-        self.drivebase.drive(speed_mm_s, 0)
+        trim = float(CONSTANTS.get("STRAIGHT_TURN_TRIM", 0.0))
+        self.drivebase.drive(speed_mm_s, trim)
     
     def turn_green(self, direction):
         """Pivot toward a detected green marker and enter the spill.
