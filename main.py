@@ -17,8 +17,8 @@ CONSTANTS = {
     "DEFAULT_TURN_RATE": 150,
     "DEFAULT_TURN_ACCELERATION": 1600,
     "MOVE_SPEED": 120,
-    "ULTRASONIC_THRESHOLD": 140,        # obstacle trigger (mm) - earlier avoidance
-    "OBSTACLE_DETECT_CONFIRM": 4,       # consecutive reads below threshold to confirm (reduce false triggers)
+    "ULTRASONIC_THRESHOLD": 140,        # obstacle trigger (mm)
+    "OBSTACLE_DETECT_CONFIRM": 4,       # consecutive reads to confirm obstacle
     "BLACK_WHEEL_SPEED": 30,
     # Optional: direct-drive trim to correct mechanical bias (1.00 = no change)
     "LEFT_MOTOR_TRIM": 1.00,
@@ -43,20 +43,20 @@ CONSTANTS = {
     "LINE_MAX_TURN_RATE": 320,
     "CORNER_ERR_THRESHOLD": 13,     # reflectance delta that indicates a sharp corner
     # Can scanning/approach tuning
-    "CAN_DEBUG_PRINT": False,           # disable debug printing in can routines
-    "CAN_SWEEP_TURN_RATE": 120,        # deg/s used for the initial 360° can sweep
-    "CAN_SWEEP_TURN_RATE_SLOW": 60,    # deg/s used after two failed 360 sweeps
-    "CAN_SCAN_MAX_MM": 350,             # default scan threshold (<= this is "seen")
-    "CAN_FIRST_HIT_MAX_MM": 550,        # permissive threshold for first detection during 360
-    "CAN_EDGE_MARGIN_MM": 120,          # margin above first-hit distance to keep the object in sweeps
-    "CAN_IGNORE_ABOVE_MM": 1800,        # treat readings above this as no target (environmental)
-    "CAN_MIN_VALID_MM": 60,             # ignore too-close returns (sensor near-field)
-    "CAN_US_MEDIAN_SAMPLES": 5,         # median filter samples for ultrasonic in can logic
+    "CAN_DEBUG_PRINT": False,
+    "CAN_SWEEP_TURN_RATE": 120,
+    "CAN_SWEEP_TURN_RATE_SLOW": 60,
+    "CAN_SCAN_MAX_MM": 350,
+    "CAN_FIRST_HIT_MAX_MM": 550,
+    "CAN_EDGE_MARGIN_MM": 120,
+    "CAN_IGNORE_ABOVE_MM": 1800,
+    "CAN_MIN_VALID_MM": 60,
+    "CAN_US_MEDIAN_SAMPLES": 5,
     # Micro-oscillation scan tuning
-    "CAN_OSC_AMP_DEG": 12,              # oscillation amplitude (+/- degrees)
-    "CAN_OSC_PASSES": 3,                # number of back-and-forth passes
-    "CAN_OSC_TURN_RATE": 60,            # deg/s during oscillation
-    "CAN_OSC_CENTER_STEP_DEG": 30,      # center advance step to cover full 360
+    "CAN_OSC_AMP_DEG": 12,
+    "CAN_OSC_PASSES": 3,
+    "CAN_OSC_TURN_RATE": 60,
+    "CAN_OSC_CENTER_STEP_DEG": 30,
     # Line reacquire after spill exit
     "LINE_REACQUIRE_STEP_MM": 15,
     "LINE_REACQUIRE_CONFIRM": 2,
@@ -76,31 +76,31 @@ CONSTANTS = {
     "SPILL_EXIT_CONFIRM": 3,
     "SPILL_EXIT_MAX_MM": 400,
     # Battery status
-    "BATTERY_V_MIN_MV": 6600,          # tune to your hub pack (empty)
-    "BATTERY_V_MAX_MV": 8400,          # tune to your hub pack (full)
-    "BATTERY_WARN_PERCENT": 85,         # warn when below this percent
+    "BATTERY_V_MIN_MV": 6600,
+    "BATTERY_V_MAX_MV": 8400,
+    "BATTERY_WARN_PERCENT": 85,
     "BATTERY_STATUS_INTERVAL_MS": 30000,
     # Behavior toggles
-    "SOUNDS_ENABLED": True,             # control state-change beeps
-    "TREAT_GRAY_AS_SPILL": False,       # if True, treat both-sensor GRAY as spill entry
-    "ENABLE_INVERTED_MODE": False,      # auto-switch follow_line error sign on inverted tracks
+    "SOUNDS_ENABLED": True,
+    "TREAT_GRAY_AS_SPILL": False,
+    "ENABLE_INVERTED_MODE": False,
     # Green spill detection stability
-    "GREEN_DETECT_CONFIRM": 3,          # cycles before entering green-left/right state
-    "SPILL_ENTRY_CONFIRM": 3,           # consecutive reads to confirm in-spill during turn
-    "SPILL_RETRY_COOLDOWN_MS": 1200,    # initial cooldown after a failed turn_green
+    "GREEN_DETECT_CONFIRM": 3,
+    "SPILL_ENTRY_CONFIRM": 3,
+    "SPILL_RETRY_COOLDOWN_MS": 1200,
     # Obstacle reacquire guard
-    "OBSTACLE_REACQUIRE_MAX_MM": 220,    # hard cap forward travel while searching for line
+    "OBSTACLE_REACQUIRE_MAX_MM": 220,
     # Yellow shortcut (deterministic sequence)
     "YELLOW_SHORTCUT_TURN_DEG": 90,
     "YELLOW_SHORTCUT_STEP_MM": 200,
     # Gyro/IMU behavior
-    "GYRO_ENABLED": True,            # toggle gyro-based straight/turn correction
-    "IMU_STABILIZE_MS": 1200,        # wait at startup (ms) if gyro is enabled
-    # Straight-drive trim (deg/s). Positive steers left; negative steers right.
-    # Use small values like -6..+6 to cancel residual bias when using manual straight.
-    "STRAIGHT_TURN_TRIM": -100,
-    # Optional color calibration overrides (used if present)
-    # Gray
+    "GYRO_ENABLED": True,
+    "IMU_STABILIZE_MS": 1200,
+    # Straight-drive trim for manual straight helper. Keep small.
+    "STRAIGHT_TURN_TRIM": 0,
+    # Base global bias added to every drive() turn rate. Negative steers right.
+    "BASE_TURN_BIAS": -10,
+    # Optional color calibration overrides
     "GRAY_REFLECTION_MIN": 60,
     # Yellow (classification)
     "YELLOW_HUE_MIN": 38,
@@ -113,8 +113,6 @@ CONSTANTS = {
     "GREEN_HUE_MAX": 178,
     "GREEN_S_MIN": 38,
 }
-
- 
 
 ports = {
     "left_drive": Port.E,
@@ -147,7 +145,6 @@ class Robot:
         # Enable gyro-based correction for straight driving and turns
         self.gyro_ok = False
         if CONSTANTS.get("GYRO_ENABLED", True):
-            # Keep robot still while stabilizing; then zero heading and enable gyro
             try:
                 wait(int(CONSTANTS.get("IMU_STABILIZE_MS", 800)))
                 try:
@@ -157,7 +154,6 @@ class Robot:
                 self.drivebase.use_gyro(True)
                 self.gyro_ok = True
             except Exception:
-                # Fallback silently if gyro not available
                 try:
                     self.drivebase.use_gyro(False)
                 except Exception:
@@ -174,21 +170,17 @@ class Robot:
         self.iteration_count = 0
         self.black_counter = 0
         self.on_inverted = False
-        # Schedule (ms since start) for arm to return after obstacle; None when not scheduled
         self.move_arm_back_after_obstacle_time = None
-        self.debug_enabled = False  # toggle prints on hub
+        self.debug_enabled = False
         self.prev_error = 0
         self.corner_hold = 0
         self.line_pivoting = False
         self._obstacle_below_count = 0
-        # Derivative filter and assists
         self.d_err_filtered = 0.0
         self.corner_until_ms = 0
-        # Black-contact slowdown helpers
         self.prev_left_is_black = False
         self.prev_right_is_black = False
         self.black_slow_until_ms = 0
-        # Yellow shortcut helpers
         self.yellow_last_seen_side = 0   # -1=left, +1=right, 0=unknown
         self.yellow_black_confirm = 0
         self.y_l_score = 0.0
@@ -202,19 +194,21 @@ class Robot:
         }
         self.default_shortcut_information = self.shortcut_information.copy()
 
-        # Can routine path recording (to return exactly to entry point)
         self.can_recording = False
-        self.can_path = []  # list of (action, value), action in {"move", "turn"}
-        # Can sweep behavior: after two failed 360 sweeps, switch to slow sweeps permanently
+        self.can_path = []
         self.can_sweep_slow_mode = False
         self.spill_entry_heading = None
-        # Green detection helpers
         self._green_left_count = 0
         self._green_right_count = 0
         self._spill_cooldown_until = 0
         self._spill_retry_backoff_ms = CONSTANTS.get("SPILL_RETRY_COOLDOWN_MS", 1200)
 
     # --- helpers ---
+    def drive_with_bias(self, speed_mm_s, turn_deg_s):
+        """All driving goes through this so global bias always applies."""
+        bias = float(CONSTANTS.get("BASE_TURN_BIAS", 0.0))
+        self.drivebase.drive(int(speed_mm_s), float(turn_deg_s) + bias)
+
     def read_ultra_mm(self):
         """Raw ultrasonic distance in mm; returns 9999 if no valid target."""
         d = self.ultrasonic_sensor.distance()
@@ -254,7 +248,7 @@ class Robot:
             turn_rate=CONSTANTS["DEFAULT_TURN_RATE"],
             turn_acceleration=CONSTANTS["DEFAULT_TURN_ACCELERATION"]
         )
-    
+
     def log(self, *msg):
         if self.debug_enabled:
             print(*msg)
@@ -284,7 +278,7 @@ class Robot:
             return
         warn = " (LOW)" if pct < CONSTANTS.get("BATTERY_WARN_PERCENT", 75) else ""
         print("Battery:", f"{pct}%", f"({volts:.2f} V){warn}")
-    
+
     def turn_in_degrees(self, degrees, wait=False):
         """Turn by a small angle using a gentle curve."""
         self.drivebase.curve(CONSTANTS["CURVE_RADIUS_LINE_FOLLOW"], degrees, Stop.COAST, wait)
@@ -309,14 +303,12 @@ class Robot:
             pass
         target = float(distance)
         direction = 1 if target >= 0 else -1
-        # Determine speed (mm/s) with correct sign
         try:
             ss, _, _, _ = self.drivebase.settings()
         except Exception:
             ss = int(CONSTANTS.get("DEFAULT_SPEED", 150))
         mm_s = int(ss if speed is None else speed) * direction
-        # Drive until target distance reached
-        self.drivebase.drive(mm_s, trim)
+        self.drive_with_bias(mm_s, trim)
         if wait:
             while True:
                 try:
@@ -332,8 +324,7 @@ class Robot:
             self.drivebase.stop()
 
     # --- Sounds ---
-    def announce_state(self, state):  # sourcery skip: use-contextlib-suppress
-        """Play a short, distinct beep pattern for each state start."""
+    def announce_state(self, state):
         if not CONSTANTS.get("SOUNDS_ENABLED", True):
             return
         sp = self.hub.speaker
@@ -355,7 +346,6 @@ class Robot:
             else:
                 sp.beep(500, 50)
         except Exception:
-            # If speaker not available or busy, ignore
             pass
 
     # --- Recording helpers for can routine ---
@@ -392,7 +382,6 @@ class Robot:
         self.sharp_turn_in_degrees(degrees, wait=wait)
 
     def can_backtrack(self):
-        """Reverse the recorded path exactly (invert order and actions)."""
         for action, value in reversed(self.can_path):
             if action == "move":
                 self.move_forward(-value)
@@ -401,7 +390,6 @@ class Robot:
         self.can_cancel_recording()
 
     def start_motors(self, left_speed, right_speed):
-        """Run motors at given speeds."""
         lt = float(CONSTANTS.get("LEFT_MOTOR_TRIM", 1.0))
         rt = float(CONSTANTS.get("RIGHT_MOTOR_TRIM", 1.0))
         ls = int(left_speed * lt)
@@ -454,9 +442,6 @@ class Robot:
             return Color.NONE
 
     def yellow_score(self, information):
-        """Return a smooth 0..1 score for how 'yellow' the sensor sees.
-        Based on hue proximity to ~55deg and saturation/brightness.
-        """
         hsv = information.get("hsv")
         if hsv is None:
             return 0.0
@@ -466,22 +451,18 @@ class Robot:
             v = float(hsv.v)
         except Exception:
             return 0.0
-        # Hue center and width (calibrated if provided)
         h_center = float(CONSTANTS.get("YELLOW_HUE_CENTER", 55.0))
-        # Support either center+width or min/max; derive width if only min/max given
         if "YELLOW_HUE_WIDTH" in CONSTANTS:
             h_width = float(CONSTANTS.get("YELLOW_HUE_WIDTH", 22.0))
         else:
             y_min = float(CONSTANTS.get("YELLOW_HUE_MIN", 45.0))
             y_max = float(CONSTANTS.get("YELLOW_HUE_MAX", 67.0))
             h_width = max(1.0, (y_max - y_min) / 2.0)
-            # If center not explicitly set, align it with min/max midpoint
             if "YELLOW_HUE_CENTER" not in CONSTANTS:
                 h_center = (y_min + y_max) / 2.0
         h_score = max(0.0, 1.0 - abs(h - h_center) / max(1.0, h_width))
         s_score = max(0.0, min(1.0, s / 100.0))
-        v_score = max(0.0, min(1.0, (v - 25.0) / 75.0))  # reduce score if too dark
-        # Weighted combination; emphasize hue, then saturation
+        v_score = max(0.0, min(1.0, (v - 25.0) / 75.0))
         return h_score * (0.6 + 0.3 * s_score + 0.1 * v_score)
 
     def get_colors(self):
@@ -500,20 +481,13 @@ class Robot:
         self.right_color = self.information_to_color(self.right_color_sensor_information)
 
     def both_black_slow(self):
-        # Use drivebase to keep heading straight; apply trim if set
         speed_mm_s = int(CONSTANTS.get("BLACK_DRIVE_SPEED", CONSTANTS.get("BLACK_WHEEL_SPEED", 30)))
         trim = float(CONSTANTS.get("STRAIGHT_TURN_TRIM", 0.0))
-        self.drivebase.drive(speed_mm_s, trim)
-    
+        self.drive_with_bias(speed_mm_s, trim)
+
     def turn_green(self, direction):
-        """Pivot toward a detected green marker and enter the spill.
-        More robust: always attempt the turn, accept both GREEN or overbright GRAY as spill,
-        and never return early leaving the robot stopped.
-        """
-        # Nudge forward a little from the detection point
         self.move_forward(8)
 
-        # If we're already clearly on the spill (both GREEN or both GRAY), go straight in
         self.get_colors()
         if (
             (self.left_color == Color.GREEN and self.right_color == Color.GREEN)
@@ -523,10 +497,7 @@ class Robot:
             self.green_spill_ending()
             return
 
-        # Decide turn direction based on the side that saw green
         degrees = -CONSTANTS["TURN_GREEN_DEGREES"] if direction == "left" else CONSTANTS["TURN_GREEN_DEGREES"]
-
-        # Turn without waiting so we can detect when we fully enter the spill
         self.drivebase.curve(CONSTANTS["CURVE_RADIUS_GREEN"], degrees, Stop.COAST, False)
 
         entered = False
@@ -547,17 +518,13 @@ class Robot:
                 confirm = 0
 
         if not entered:
-            # Undo the small forward nudge so we don't drift off the line over time
             self.move_forward(-CONSTANTS["BACK_AFTER_GREEN_TURN_DISTANCE"])
-            # Ensure we resume normal behavior and start a short cooldown
             self.robot_state = "line"
             now = self.clock.time()
             self._spill_cooldown_until = now + self._spill_retry_backoff_ms
-            # Exponential backoff up to 5s to avoid repeated attempts/beeps
             self._spill_retry_backoff_ms = min(5000, int(self._spill_retry_backoff_ms * 2))
 
     def follow_line(self):
-        # Simple PD line follow with dynamic slowdown; no blocking, no pivots
         left_ref = self.left_color_sensor_information["reflection"]
         right_ref = self.right_color_sensor_information["reflection"]
 
@@ -569,41 +536,30 @@ class Robot:
         self.prev_error = error
         turn_rate = kp * error + kd * d_err
 
-        # Clamp turn rate
         max_turn = CONSTANTS.get("LINE_MAX_TURN_RATE", 320)
         if turn_rate > max_turn:
             turn_rate = max_turn
         elif turn_rate < -max_turn:
             turn_rate = -max_turn
 
-        # Slow down slightly with larger error to make tight corners
         err_scale = min(1.0, abs(error) / max(1, CONSTANTS["CORNER_ERR_THRESHOLD"]))
         base_speed = CONSTANTS["MOVE_SPEED"]
         speed = max(CONSTANTS["LINE_MIN_SPEED"], int(base_speed * (1 - 0.4 * err_scale)))
 
-        self.drivebase.drive(speed, turn_rate)
-    
+        self.drive_with_bias(speed, turn_rate)
+
     def follow_yellow(self):
-        """Follow the yellow shortcut line using a color-based PID.
-        Error is derived from which sensor sees yellow (-1,0,+1 scaled), with
-        filtering and speed shaping. Switch back to black only when no yellow
-        is seen and black is confirmed.
-        """
-        # Yellow presence
         y_left = (self.left_color == Color.YELLOW)
         y_right = (self.right_color == Color.YELLOW)
-        # Track last seen side to stabilize search/steering
         if y_left and not y_right:
             self.yellow_last_seen_side = -1
         elif y_right and not y_left:
             self.yellow_last_seen_side = +1
 
-        # Smooth color-based error using continuous yellow scores
         raw_y_l = self.yellow_score(self.left_color_sensor_information)
         raw_y_r = self.yellow_score(self.right_color_sensor_information)
         error = (raw_y_r - raw_y_l) * float(CONSTANTS.get("YELLOW_ERR_SCALE", 50))
 
-        # Timing
         now = self.clock.time()
         if not hasattr(self, "y_pid_last_ms"):
             self.y_pid_last_ms = 0
@@ -613,12 +569,10 @@ class Robot:
         dt = 0.01 if self.y_pid_last_ms == 0 else max(0.001, (now - self.y_pid_last_ms) / 1000.0)
         self.y_pid_last_ms = now
 
-        # Gains (fallback to black PID values)
         kp = float(CONSTANTS.get("YELLOW_KP", CONSTANTS.get("LINE_KP", 3.2)))
         ki = float(CONSTANTS.get("YELLOW_KI", CONSTANTS.get("LINE_KI", 0.02)))
         kd = float(CONSTANTS.get("YELLOW_KD", CONSTANTS.get("LINE_KD", 18.0)))
 
-        # Integral with clamp
         self.y_error_integral += error * dt
         i_max = float(CONSTANTS.get("LINE_I_MAX", 80.0))
         if self.y_error_integral > i_max:
@@ -626,7 +580,6 @@ class Robot:
         elif self.y_error_integral < -i_max:
             self.y_error_integral = -i_max
 
-        # Derivative with smoothing
         raw_d = (error - self.y_prev_error) / dt
         self.y_prev_error = error
         alpha = float(CONSTANTS.get("YELLOW_DERIV_ALPHA", 0.2))
@@ -634,18 +587,15 @@ class Robot:
 
         turn = kp * error + ki * self.y_error_integral + kd * self.y_d_err_filtered
 
-        # Clamp turn
         max_turn = int(CONSTANTS.get("YELLOW_MAX_TURN_RATE", CONSTANTS.get("LINE_MAX_TURN_RATE", 320)))
         if turn > max_turn:
             turn = max_turn
         elif turn < -max_turn:
             turn = -max_turn
 
-        # Speed shaping
         base = int(CONSTANTS.get("YELLOW_BASE_SPEED", CONSTANTS.get("MOVE_SPEED", 170)))
         min_s = int(CONSTANTS.get("YELLOW_MIN_SPEED", CONSTANTS.get("LINE_MIN_SPEED", 80)))
         if raw_y_l < 0.1 and raw_y_r < 0.1:
-            # gentle search toward last seen side
             if getattr(self, "yellow_last_seen_side", 0) != 0 and abs(turn) < max_turn * 0.4:
                 turn = self.yellow_last_seen_side * max(60, int(max_turn * 0.25))
             speed = max(min_s, int(base * 0.5))
@@ -653,9 +603,8 @@ class Robot:
             err_scale = min(1.0, abs(error) / float(max(1, CONSTANTS.get("CORNER_ERR_THRESHOLD", 13) * 4)))
             speed = max(min_s, int(base * (1.0 - 0.5 * err_scale)))
 
-        self.drivebase.drive(speed, turn)
+        self.drive_with_bias(speed, turn)
 
-        # Exit back to black only when no yellow is present and black confirmed
         y_exit = float(CONSTANTS.get("YELLOW_EXIT_SCORE", 0.08))
         if raw_y_l < y_exit and raw_y_r < y_exit:
             on_black = (self.left_color == Color.BLACK) or (self.right_color == Color.BLACK)
@@ -670,16 +619,6 @@ class Robot:
                 self.robot_state = "line"
 
     def execute_yellow_shortcut(self, direction):
-        # sourcery skip: use-contextlib-suppress
-        """Perform the deterministic yellow shortcut movement and resume line.
-        direction: 'left' or 'right'
-        Sequence per spec:
-        - Turn 90° onto yellow
-        - Drive forward 200 mm
-        - Turn 90° the opposite way
-        - Drive forward 200 mm
-        - Turn 90° back to align with black
-        """
         deg = int(CONSTANTS.get("YELLOW_SHORTCUT_TURN_DEG", 90))
         step = int(CONSTANTS.get("YELLOW_SHORTCUT_STEP_MM", 200))
         self.stop_motors()
@@ -700,11 +639,9 @@ class Robot:
         self.robot_state = "line"
 
     def turn_and_detect_ultrasonic(self, degrees=360):
-        """Single 360 scan. Returns (min_dist, at_angle)."""
         lowest_ultrasonic = 9999
         lowest_ultrasonic_angle = 0
         self.drivebase.reset()
-        # Use fast or slow sweep rate based on can_sweep_slow_mode
         try:
             ss, sa, prev_tr, ta = self.drivebase.settings()
         except Exception:
@@ -722,23 +659,17 @@ class Robot:
             if new_ultra < lowest_ultrasonic:
                 lowest_ultrasonic = new_ultra
                 lowest_ultrasonic_angle = self.drivebase.angle()
-        # Restore previous turn rate
         if prev_tr is not None:
             self.drivebase.settings(turn_rate=prev_tr)
         return lowest_ultrasonic, lowest_ultrasonic_angle
 
     def sweep_find_can_midpoint(self, sweep_deg=160, threshold=None, confirm=3):
-        """Sweep left→right. Find first/last angles where can is seen (<= threshold).
-        Returns (mid_angle_deg, approach_dist_mm) or (None, None).
-        """
         if threshold is None:
             threshold = CONSTANTS["CAN_SCAN_MAX_MM"]
 
-        # Move to left edge and zero angle reference
         self.sharp_turn_in_degrees(-sweep_deg // 2, wait=True)
         self.drivebase.reset()
 
-        # Sweep to the right and record points (angle, distance)
         self.sharp_turn_in_degrees(sweep_deg, wait=False)
         points = []
         while not self.drivebase.done():
@@ -746,7 +677,6 @@ class Robot:
             a = self.drivebase.angle()
             points.append((a, d))
 
-        # Segment contiguous points within threshold; choose segment with closest min distance
         segments = []
         cur = []
         for a, d in points:
@@ -765,11 +695,9 @@ class Robot:
         def seg_min(seg):
             return min(seg, key=lambda t: t[1])
 
-        # Pick the segment whose minimum distance is smallest (closest object)
         best_seg = min(segments, key=lambda s: seg_min(s)[1])
         min_a, min_d = seg_min(best_seg)
 
-        # Weighted centroid around local minimum to reduce bias
         window = [(a, d) for a, d in best_seg if d <= min_d + 40]
         if window:
             wsum = 0.0
@@ -785,13 +713,9 @@ class Robot:
         return target_angle, min_d
 
     def find_can_edges_midpoint(self, sweep_deg=160, threshold=None, confirm=3):
-        """360 scan until first detection, then sweep left/right to edges and return midpoint.
-        Returns (mid_angle_deg, min_dist_mm) or (None, None).
-        """
         if threshold is None:
             threshold = CONSTANTS["CAN_SCAN_MAX_MM"]
 
-        # 360 to find the first detection point (record actual turned angle)
         attempts = 0
         first_hit_angle = None
         first_hit_distance = 9999
@@ -799,7 +723,6 @@ class Robot:
         while True:
             self.drivebase.reset()
             start_ang = self.drivebase.angle()
-            # Temporarily set a specific sweep turn rate
             try:
                 ss, sa, prev_tr, ta = self.drivebase.settings()
             except Exception:
@@ -812,7 +735,6 @@ class Robot:
             self.drivebase.settings(turn_rate=sweep_rate)
             first_hit_angle = None
             while self.drivebase.angle() != 0:
-                # ensure reset applied before starting turn
                 break
             self.can_log("CAN 360 sweep: rate=", sweep_rate)
             self.sharp_turn_in_degrees(360, wait=False)
@@ -827,10 +749,8 @@ class Robot:
                     first_hit_distance = d
                     break
             self.drivebase.stop()
-            # Restore previous turn rate if available
             if prev_tr is not None:
                 self.drivebase.settings(turn_rate=prev_tr)
-            # Record actual turned amount
             if self.can_recording:
                 self.can_path.append(("turn", self.drivebase.angle() - start_ang))
 
@@ -838,24 +758,18 @@ class Robot:
                 self.can_log("CAN 360: first hit at angle=", first_hit_angle, "min_d=", min_d)
                 break
 
-            # Not found this sweep
             if not self.can_sweep_slow_mode:
                 attempts += 1
                 if attempts < 2:
-                    # Try a second fast sweep
                     self.can_log("CAN 360: no detection, fast attempt", attempts)
                     continue
-                # After two failed sweeps, switch to slow mode for all future 360s
                 self.can_sweep_slow_mode = True
                 self.can_log("CAN 360: switching to slow sweep rate")
-                # Perform one immediate slow sweep
                 continue
             else:
-                # Already slow and still not detected; give up
                 self.can_log("CAN 360: no detection even in slow mode; giving up")
                 return None, None
 
-        # Use current heading as center, sweep left to detect left edge
         self.drivebase.reset()
         start_ang = self.drivebase.angle()
         self.sharp_turn_in_degrees(-(sweep_deg // 2), wait=False)
@@ -880,11 +794,9 @@ class Robot:
         self.drivebase.stop()
         if self.can_recording:
             self.can_path.append(("turn", self.drivebase.angle() - start_ang))
-        # Fallback: if we ended the sweep still seeing the can, use last_seen
         if left_edge is None and last_seen is not None:
             left_edge = last_seen
 
-        # Sweep right to detect right edge (keep same angle frame as left)
         start_ang = self.drivebase.angle()
         self.sharp_turn_in_degrees(sweep_deg, wait=False)
         right_edge = None
@@ -907,7 +819,6 @@ class Robot:
         self.drivebase.stop()
         if self.can_recording:
             self.can_path.append(("turn", self.drivebase.angle() - start_ang))
-        # Fallback: end-of-sweep still seeing can
         if right_edge is None and last_seen is not None:
             right_edge = last_seen
 
@@ -918,28 +829,23 @@ class Robot:
         return mid, min_d
 
     def find_can_angle_micro_oscillation(self, amp_deg=None, passes=None):
-        """Oscillate around center heading and return the angle with the minimum filtered distance.
-        Returns (angle_deg, min_dist_mm) or (None, None) if nothing plausible is seen.
-        """
         if amp_deg is None:
             amp_deg = CONSTANTS["CAN_OSC_AMP_DEG"]
         if passes is None:
             passes = CONSTANTS["CAN_OSC_PASSES"]
 
-        # Save/override turn rate for precise oscillation
         try:
             ss, sa, prev_tr, ta = self.drivebase.settings()
         except Exception:
             prev_tr = None
         self.drivebase.settings(turn_rate=CONSTANTS["CAN_OSC_TURN_RATE"])
 
-        self.drivebase.reset()  # center = 0 deg
+        self.drivebase.reset()
         best_d = 9999
         best_a = 0
 
         def sample_during_turn(target_abs_angle):
             nonlocal best_d, best_a
-            # Compute incremental delta to reach absolute angle
             delta = target_abs_angle - self.drivebase.angle()
             self.sharp_turn_in_degrees(delta, wait=False)
             while not self.drivebase.done():
@@ -950,29 +856,20 @@ class Robot:
                     best_d = d
                     best_a = a
 
-        # Perform back-and-forth oscillation passes
-        for i in range(passes):
-            # Left sweep to -amp
+        for _ in range(passes):
             sample_during_turn(-amp_deg)
-            # Right sweep to +amp
             sample_during_turn(+amp_deg)
 
-        # Return to center (optional; do not record in can path here)
         sample_during_turn(0)
 
-        # Restore turn rate
         if prev_tr is not None:
             self.drivebase.settings(turn_rate=prev_tr)
 
-        # Validate best distance against acceptance threshold
         if best_d <= CONSTANTS["CAN_FIRST_HIT_MAX_MM"]:
             return best_a, best_d
         return None, None
 
     def find_can_angle_micro_oscillation_full360(self, amp_deg=None, center_step_deg=None, passes=None):
-        """Cover the full 360° by oscillating around advancing centers.
-        Returns (angle_deg, min_dist_mm) or (None, None).
-        """
         if amp_deg is None:
             amp_deg = CONSTANTS["CAN_OSC_AMP_DEG"]
         if center_step_deg is None:
@@ -980,14 +877,13 @@ class Robot:
         if passes is None:
             passes = CONSTANTS["CAN_OSC_PASSES"]
 
-        # Save/override turn rate for precise oscillation
         try:
             ss, sa, prev_tr, ta = self.drivebase.settings()
         except Exception:
             prev_tr = None
         self.drivebase.settings(turn_rate=CONSTANTS["CAN_OSC_TURN_RATE"])
 
-        self.drivebase.reset()  # set absolute angle reference
+        self.drivebase.reset()
         best_d = 9999
         best_a = None
 
@@ -1003,18 +899,14 @@ class Robot:
                     best_d = d
                     best_a = a
 
-        # Centers from 0 to <360 in steps
         centers = list(range(0, 360, max(1, int(center_step_deg))))
         for _ in range(passes):
             for c in centers:
-                # Oscillate around center c
                 sample_during_turn(c - amp_deg)
                 sample_during_turn(c + amp_deg)
 
-        # Return to nearest center (optional tidy)
         sample_during_turn(0)
 
-        # Restore turn rate
         if prev_tr is not None:
             self.drivebase.settings(turn_rate=prev_tr)
 
@@ -1025,18 +917,14 @@ class Robot:
         return None, None
 
     def approach_can_at_angle(self, target_angle_deg, stop_offset_mm=20, max_step_mm=30):
-        """Face target and step forward until within offset (no micro-sweeps).
-        Returns the total forward distance moved (mm).
-        """
         total_forward = 0
         current = self.drivebase.angle()
-        # Face the target once, then keep heading fixed during the approach
         self.can_turn(target_angle_deg - current)
         while True:
             d = self.read_ultra_mm_can()
             self.can_log("CAN APPROACH d=", d)
             if d >= 9000:
-                break  # lost target
+                break
             if d <= stop_offset_mm + 5:
                 break
 
@@ -1047,9 +935,6 @@ class Robot:
         return total_forward
 
     def push_can_off_spill(self, step_mm=20, confirm=3, max_push_mm=500):
-        """Drive forward in steps while on green; stop when off-green confirmed.
-        Returns total forward distance moved (mm).
-        """
         pushed = 0
         off_count = 0
         while pushed < max_push_mm:
@@ -1068,32 +953,19 @@ class Robot:
         return pushed
 
     def push_can_to_back_of_spill_until_boundary(self, step_mm=20, bound_confirm=3, max_push_mm=700):
-        """Face toward spill back (entry heading) and push with one continuous drive
-        until both sensors see red or both see white.
-        Returns total forward distance moved (mm).
-        """
-        # Face the original spill entry heading if known
         if self.spill_entry_heading is not None:
             self.face_heading(self.spill_entry_heading)
 
-        # Use continuous drive forward at a steady speed, checking sensors on the fly.
-        # Keep speed consistent with prior "slow" precision settings used in spill logic.
-        push_speed = 80  # mm/s; matches slow precise movement set earlier
-
-        # Reset distance tracking so we can record a single move for backtrack
+        push_speed = 80  # mm/s steady push
         self.drivebase.reset()
-
-        # Start continuous forward motion
-        self.drivebase.drive(push_speed, 0)
+        self.drive_with_bias(push_speed, 0)
 
         hit_confirm = 0
         while True:
-            # Optional safety cap on max push distance
             pushed = abs(self.drivebase.distance())
             if pushed >= max_push_mm:
                 break
 
-            # Read colors to detect the boundary condition (two RED or two WHITE)
             self.get_colors()
             boundary = (
                 (self.left_color == Color.RED and self.right_color == Color.RED)
@@ -1106,32 +978,22 @@ class Robot:
             else:
                 hit_confirm = 0
 
-            # Brief wait to avoid saturating the loop while driving
             wait(5)
 
-        # Stop driving
         self.drivebase.stop()
-
-        # Final distance pushed in mm
         pushed = abs(self.drivebase.distance())
-
-        # Record as a single movement in the can path so backtracking reverses it precisely
         if self.can_recording and pushed > 0:
             self.can_path.append(("move", pushed))
 
         return pushed
 
     def green_spill_ending(self):
-        # Reset spill retry backoff on successful entry
         self._spill_retry_backoff_ms = CONSTANTS.get("SPILL_RETRY_COOLDOWN_MS", 1200)
-        # Begin path recording at spill entry to enable exact return later
         self.can_start_recording()
-        # Remember entry heading to face spill back later
         try:
             self.spill_entry_heading = self.hub.imu.heading()
         except Exception:
             self.spill_entry_heading = None
-        # move off the line a bit, verify green
         self.can_move_forward(10)
         self.get_colors()
         in_spill = (
@@ -1139,11 +1001,9 @@ class Robot:
             or (self.left_color == Color.GRAY and self.right_color == Color.GRAY)
         )
         if not in_spill:
-            # Not truly in green/gray spill: reverse recorded path to entry and abort
             self.can_backtrack()
             return
 
-        # slow settings for precision
         self.drivebase.settings(
             straight_speed=80,
             straight_acceleration=450,
@@ -1153,41 +1013,32 @@ class Robot:
 
         self.rotate_arm(-86, stop_method=Stop.HOLD)  # Arm up
 
-        # center in spill
         self.can_move_forward(280)
         self.can_move_forward(-20)
         self.stop_motors()
 
-        # --- Two fast 360s, then slow sweeps; on hit, sweep edges and take midpoint ---
         mid_angle, min_dist = self.find_can_edges_midpoint(
             sweep_deg=160, threshold=CONSTANTS["CAN_SCAN_MAX_MM"]
         )
         if mid_angle is None:
-            # nothing found; exit without more spinning
             self.settings_default()
             return
 
-        # Approach along the detected midpoint angle
         self.approach_can_at_angle(mid_angle, stop_offset_mm=20)
 
-        # Grab
         self.rotate_arm(-95, stop_method=Stop.COAST, wait=True)
 
-        # Push the can toward the back of the spill until boundary (two RED or two WHITE), then release
         push_forward = self.push_can_to_back_of_spill_until_boundary(
             step_mm=CONSTANTS["CAN_PUSH_STEP_MM"],
             bound_confirm=CONSTANTS["CAN_PUSH_CONFIRM"],
             max_push_mm=CONSTANTS["CAN_PUSH_MAX_MM"],
         )
 
-        # Open/release and back up a bit to clear the can
         self.rotate_arm(180)
-        self.can_move_forward(-CONSTANTS["CAN_RELEASE_BACK_MM"])  # clear the can
+        self.can_move_forward(-CONSTANTS["CAN_RELEASE_BACK_MM"])
 
-        # Return exactly to the spill entry by reversing the recorded path
         self.can_backtrack()
 
-        # Face outward (opposite of entry heading) and drive forward to exit the green spill so line follow can resume
         if self.spill_entry_heading is not None:
             exit_heading = self.normalize_angle(self.spill_entry_heading + 180)
             self.face_heading(exit_heading)
@@ -1199,9 +1050,7 @@ class Robot:
             max_mm=CONSTANTS["SPILL_EXIT_MAX_MM"],
         )
 
-        # Nudge backward a little so the line reacquire starts just after the spill boundary
         self.move_forward(-CONSTANTS["LINE_REACQUIRE_BACK_MM"])
-        # If we accidentally stepped back onto green, step forward minimally to clear it
         self.get_colors()
         if self.left_color == Color.GREEN and self.right_color == Color.GREEN:
             self.exit_green_spill_forward(
@@ -1210,21 +1059,16 @@ class Robot:
                 max_mm=CONSTANTS["SPILL_EXIT_STEP_MM"] * 3,
             )
 
-        # Try to reacquire the line after exiting the spill by oscillating turns
         self.reacquire_line_oscillate(
             step_deg=CONSTANTS["LINE_REACQUIRE_TURN_STEP_DEG"],
             max_deg=CONSTANTS["LINE_REACQUIRE_TURN_MAX_DEG"],
             confirm=CONSTANTS["LINE_REACQUIRE_CONFIRM"],
         )
 
-        # Resume default settings and line following
         self.settings_default()
         self.robot_state = "line"
 
     def exit_green_spill_forward(self, step_mm=20, confirm=3, max_mm=400):
-        """From within a green spill, drive forward until both sensors are not green.
-        Uses a small confirmation to avoid flapping.
-        """
         moved = 0
         off_count = 0
         while moved < max_mm:
@@ -1243,10 +1087,6 @@ class Robot:
         return moved
 
     def reacquire_line_oscillate(self, step_deg=10, max_deg=120, confirm=2):
-        """After exiting green, oscillate left/right around current heading to find the black line.
-        Turns incrementally without driving forward. Returns True if found, else False.
-        """
-        # Helper to confirm line for N consecutive reads
         def confirm_line(n):
             count = 0
             for _ in range(max(1, n)):
@@ -1260,15 +1100,12 @@ class Robot:
                 wait(5)
             return False
 
-        # Start centered
         current_offset = 0
         if confirm_line(confirm):
             return True
 
-        # Sweep left/right with increasing amplitude
         amp = step_deg
         while amp <= max_deg:
-            # Left to -amp
             delta = -amp - current_offset
             if delta != 0:
                 self.sharp_turn_in_degrees(delta)
@@ -1276,7 +1113,6 @@ class Robot:
             if confirm_line(confirm):
                 return True
 
-            # Right to +amp
             delta = amp - current_offset
             if delta != 0:
                 self.sharp_turn_in_degrees(delta)
@@ -1289,13 +1125,10 @@ class Robot:
         return False
 
     def align_to_line_in_place(self, timeout_ms=1500, err_tol=3):
-        """Turn in place using PD on sensor reflectance until centered on the line.
-        Does not drive forward to avoid overshooting across the line.
-        """
         start = self.clock.time()
         prev_err = 0
         kp = CONSTANTS.get("LINE_KP", 3.2)
-        kd = 0.0  # keep stable while stationary
+        kd = 0.0
         max_turn = CONSTANTS.get("LINE_MAX_TURN_RATE", 320)
         while self.clock.time() - start < timeout_ms:
             self.get_colors()
@@ -1311,17 +1144,14 @@ class Robot:
                 turn_rate = max_turn
             elif turn_rate < -max_turn:
                 turn_rate = -max_turn
-            # rotate in place
-            self.drivebase.drive(0, turn_rate)
+            self.drive_with_bias(0, turn_rate)
             wait(10)
         self.drivebase.stop()
 
     def avoid_obstacle(self):
-        # Pause and lift arm to avoid snagging
         self.stop_motors()
         self.rotate_arm(-90)
 
-        # Initial bypass turn and large curve around obstacle
         self.sharp_turn_in_degrees(CONSTANTS["OBSTACLE_INITIAL_TURN_DEGREES"])
         self.drivebase.curve(
             CONSTANTS["CURVE_RADIUS_OBSTACLE"],
@@ -1330,7 +1160,6 @@ class Robot:
             True,
         )
 
-        # Stop after the avoidance arc, then reacquire by turning in place only (no forward motion)
         self.drivebase.stop()
         found = self.reacquire_line_oscillate(
             step_deg=CONSTANTS.get("LINE_REACQUIRE_TURN_STEP_DEG", 10),
@@ -1338,50 +1167,39 @@ class Robot:
             confirm=CONSTANTS.get("LINE_REACQUIRE_CONFIRM", 2),
         )
         if not found:
-            # Bias a final turn inward and try once more, still without moving forward
             self.turn_in_degrees(CONSTANTS["OBSTACLE_FINAL_TURN_DEGREES"])
             found = self.reacquire_line_oscillate(
                 step_deg=CONSTANTS.get("LINE_REACQUIRE_TURN_STEP_DEG", 10),
                 max_deg=CONSTANTS.get("LINE_REACQUIRE_TURN_MAX_DEG", 120),
                 confirm=CONSTANTS.get("LINE_REACQUIRE_CONFIRM", 2),
             )
-        # If we located the line, center on it before resuming
         if found:
             self.align_to_line_in_place(timeout_ms=1500, err_tol=3)
 
-        # Resume line following
         self.robot_state = "line"
-        # Schedule arm to come back down later using clock time (ms)
         self.move_arm_back_after_obstacle_time = self.clock.time() + CONSTANTS["OBSTACLE_ARM_RETURN_DELAY"]
-    
+
     def update(self):
         self.get_colors()
-        # Obstacle logic uses a median-filtered distance and a small confirmation window
         self.ultrasonic = self.read_ultra_mm_obstacle()
-        # Debug ultrasonic print removed
-        # Battery warning (printed once when crossing threshold)
+
         if not hasattr(self, "_battery_warned"):
             self._battery_warned = False
             self._last_batt_status = 0
         pct, volts = self.battery_percent()
         if pct is not None:
             now = self.clock.time()
-            # periodic status
             if now - self._last_batt_status > CONSTANTS.get("BATTERY_STATUS_INTERVAL_MS", 30000):
                 print("Battery:", f"{pct}%", f"({volts:.2f} V)")
                 self._last_batt_status = now
-            # low warning
             if (pct < CONSTANTS.get("BATTERY_WARN_PERCENT", 75)) and (not self._battery_warned):
                 print("WARNING: Battery low:", f"{pct}%", f"({volts:.2f} V)")
                 self._battery_warned = True
-        # previous_state is updated after move() executes
 
-        # Timed arm return after obstacle
         if self.move_arm_back_after_obstacle_time is not None and self.clock.time() >= self.move_arm_back_after_obstacle_time:
             self.move_arm_back_after_obstacle_time = None
             self.rotate_arm(90, stop_method=Stop.COAST)
 
-        # Enter spill only when both GREEN (or both GRAY if explicitly enabled)
         both_green = (self.left_color == Color.GREEN and self.right_color == Color.GREEN)
         both_gray = (self.left_color == Color.GRAY and self.right_color == Color.GRAY)
         if both_green or (CONSTANTS.get("TREAT_GRAY_AS_SPILL", False) and both_gray):
@@ -1409,7 +1227,6 @@ class Robot:
             return
 
         elif ALLOW_YELLOW and ((self.left_color == Color.YELLOW) ^ (self.right_color == Color.YELLOW)):
-            # Trigger deterministic yellow shortcut movement by side (inverted mapping)
             if self.left_color == Color.YELLOW:
                 self.robot_state = "yellow-right"
             else:
@@ -1427,7 +1244,6 @@ class Robot:
             self.robot_state = "line"
 
         elif self.left_color == Color.GREEN or self.right_color == Color.GREEN:
-            # Debounce green detection to avoid flapping
             if self.left_color == Color.GREEN:
                 self._green_left_count += 1
             else:
@@ -1445,15 +1261,11 @@ class Robot:
                 else:
                     self.robot_state = "line"
             else:
-                # In cooldown, ignore transient greens
                 self.robot_state = "line"
         else:
             self.robot_state = "line"
 
-        # Yellow shortcut exit handled in follow_yellow()
-
     def move(self):
-        # Announce state transitions with distinct beeps
         if self.robot_state != self.previous_state:
             self.announce_state(self.robot_state)
 
@@ -1476,20 +1288,15 @@ class Robot:
         elif self.robot_state == "stop":
             self.stop_motors()
 
-        # Record this state as the last seen
         self.previous_state = self.robot_state
 
     def debug(self):
-        # No debug printing per request
         pass
 
-    def run(self):  # sourcery skip: use-contextlib-suppress
+    def run(self):
         self.battery_display()
-        # Reset arm position if needed using a valid stop method
         self.rotate_arm(180, Stop.COAST)
-        # Try to standardize heading at start for consistent gyro behavior
         try:
-            # On flat surface, this helps align IMU heading to 0
             self.hub.imu.reset_heading(0)
         except Exception:
             pass
@@ -1499,17 +1306,15 @@ class Robot:
             self.move()
             self.debug()
 
-def main():  # sourcery skip: use-contextlib-suppress
+def main():
     robot = Robot()
     try:
         robot.run()
     finally:
-        # Always stop motors on exit/error to avoid runaway
         try:
             robot.stop_motors()
         except Exception:
             pass
-
 
 if __name__ == "__main__":
     main()
