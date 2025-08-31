@@ -20,8 +20,11 @@ CONSTANTS = {
     "ULTRASONIC_THRESHOLD": 140,        # obstacle trigger (mm) - earlier avoidance
     "OBSTACLE_DETECT_CONFIRM": 4,       # consecutive reads below threshold to confirm (reduce false triggers)
     "BLACK_WHEEL_SPEED": 30,
+    # Optional: direct-drive trim to correct mechanical bias (1.00 = no change)
+    "LEFT_MOTOR_TRIM": 1.00,
+    "RIGHT_MOTOR_TRIM": 1.00,
     "TURN_GREEN_DEGREES": 50,
-    "BACK_AFTER_GREEN_TURN_DISTANCE": 6,
+    "BACK_AFTER_GREEN_TURN_DISTANCE": 60,
     "TURN_YELLOW_DEGREES": 20,
     "CURVE_RADIUS_GREEN": 78,
     "CURVE_RADIUS_OBSTACLE": 160,
@@ -60,7 +63,7 @@ CONSTANTS = {
     "LINE_REACQUIRE_MAX_MM": 400,
     "LINE_REACQUIRE_BACK_MM": 50,
     # Robust line detection threshold (reflection) for reacquire
-    "LINE_BLACK_REF_THRESHOLD": 35,
+    "LINE_BLACK_REF_THRESHOLD": 39,
     "LINE_REACQUIRE_TURN_STEP_DEG": 10,
     "LINE_REACQUIRE_TURN_MAX_DEG": 120,
     "CAN_SEGMENT_MIN_POINTS": 4,
@@ -90,6 +93,19 @@ CONSTANTS = {
     # Yellow shortcut (deterministic sequence)
     "YELLOW_SHORTCUT_TURN_DEG": 90,
     "YELLOW_SHORTCUT_STEP_MM": 200,
+    # Optional color calibration overrides (used if present)
+    # Gray
+    "GRAY_REFLECTION_MIN": 60,
+    # Yellow (classification)
+    "YELLOW_HUE_MIN": 38,
+    "YELLOW_HUE_MAX": 62,
+    # Yellow scoring (follow_yellow)
+    "YELLOW_HUE_CENTER": 49.5,
+    "YELLOW_HUE_WIDTH": 12.0,
+    # Green
+    "GREEN_HUE_MIN": 148,
+    "GREEN_HUE_MAX": 178,
+    "GREEN_S_MIN": 38,
 }
 
  
@@ -330,10 +346,14 @@ class Robot:
 
     def start_motors(self, left_speed, right_speed):
         """Run motors at given speeds."""
-        if self.left_drive.speed() != left_speed:
-            self.left_drive.run(left_speed)
-        if self.right_drive.speed() != right_speed:
-            self.right_drive.run(right_speed)
+        lt = float(CONSTANTS.get("LEFT_MOTOR_TRIM", 1.0))
+        rt = float(CONSTANTS.get("RIGHT_MOTOR_TRIM", 1.0))
+        ls = int(left_speed * lt)
+        rs = int(right_speed * rt)
+        if self.left_drive.speed() != ls:
+            self.left_drive.run(ls)
+        if self.right_drive.speed() != rs:
+            self.right_drive.run(rs)
 
     def stop_motors(self):
         self.left_drive.stop()
@@ -348,13 +368,23 @@ class Robot:
         self.drivebase.settings(straight_speed=speed)
 
     def information_to_color(self, information):
-        if information["reflection"] > 99:
+        gray_ref_min = int(CONSTANTS.get("GRAY_REFLECTION_MIN", 99))
+        if information["reflection"] > gray_ref_min:
             return Color.GRAY
         elif information["color"] == Color.WHITE:
             return Color.WHITE
-        elif information["hsv"].h < 67 and information["hsv"].h > 45 and ALLOW_YELLOW:
+        elif (
+            ALLOW_YELLOW
+            and CONSTANTS.get("YELLOW_HUE_MIN") is not None
+            and CONSTANTS.get("YELLOW_HUE_MAX") is not None
+            and CONSTANTS.get("YELLOW_HUE_MIN") < information["hsv"].h < CONSTANTS.get("YELLOW_HUE_MAX")
+        ):
             return Color.YELLOW
-        elif information["color"] == Color.GREEN and 135 < information["hsv"].h < 165 and information["hsv"].s > 30:
+        elif (
+            information["color"] == Color.GREEN
+            and CONSTANTS.get("GREEN_HUE_MIN", 135) < information["hsv"].h < CONSTANTS.get("GREEN_HUE_MAX", 165)
+            and information["hsv"].s > CONSTANTS.get("GREEN_S_MIN", 30)
+        ):
             return Color.GREEN
         elif information["color"] == Color.BLUE and information["hsv"].s > 80 and information["hsv"].v > 80:
             return Color.BLUE
@@ -362,7 +392,7 @@ class Robot:
             return Color.RED
         elif information["color"] == Color.RED:
             return Color.ORANGE
-        elif information["hsv"].s < 25 and information["reflection"] < 30:
+        elif information["hsv"].s < 25 and information["reflection"] < int(CONSTANTS.get("LINE_BLACK_REF_THRESHOLD", 30)):
             return Color.BLACK
         else:
             return Color.NONE
@@ -380,9 +410,18 @@ class Robot:
             v = float(hsv.v)
         except Exception:
             return 0.0
-        # Hue center and width
-        h_center = 55.0
-        h_width = 22.0   # full score within ~±10–15deg, taper to 0 at ~±22deg
+        # Hue center and width (calibrated if provided)
+        h_center = float(CONSTANTS.get("YELLOW_HUE_CENTER", 55.0))
+        # Support either center+width or min/max; derive width if only min/max given
+        if "YELLOW_HUE_WIDTH" in CONSTANTS:
+            h_width = float(CONSTANTS.get("YELLOW_HUE_WIDTH", 22.0))
+        else:
+            y_min = float(CONSTANTS.get("YELLOW_HUE_MIN", 45.0))
+            y_max = float(CONSTANTS.get("YELLOW_HUE_MAX", 67.0))
+            h_width = max(1.0, (y_max - y_min) / 2.0)
+            # If center not explicitly set, align it with min/max midpoint
+            if "YELLOW_HUE_CENTER" not in CONSTANTS:
+                h_center = (y_min + y_max) / 2.0
         h_score = max(0.0, 1.0 - abs(h - h_center) / max(1.0, h_width))
         s_score = max(0.0, min(1.0, s / 100.0))
         v_score = max(0.0, min(1.0, (v - 25.0) / 75.0))  # reduce score if too dark
@@ -405,7 +444,9 @@ class Robot:
         self.right_color = self.information_to_color(self.right_color_sensor_information)
 
     def both_black_slow(self):
-        self.start_motors(CONSTANTS["BLACK_WHEEL_SPEED"], CONSTANTS["BLACK_WHEEL_SPEED"])
+        # Use drivebase + gyro to keep heading strictly straight
+        speed_mm_s = int(CONSTANTS.get("BLACK_DRIVE_SPEED", CONSTANTS.get("BLACK_WHEEL_SPEED", 30)))
+        self.drivebase.drive(speed_mm_s, 0)
     
     def turn_green(self, direction):
         """Pivot toward a detected green marker and enter the spill.
