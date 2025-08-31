@@ -1,0 +1,6 @@
+# Simple wrapper so `python run.py` behaves like VS Code's launch.
+import subprocess, sys, os
+target = os.path.join(os.path.dirname(__file__), "main.py")
+# Change "ble" to "usb" if you use USB.
+sys.exit(subprocess.call([sys.executable, "-m", "pybricksdev", "run", "ble", target]))
+

@@ -1,0 +1,4 @@
+pybricksdev
+bleak
+pyserial
+pybricks @ git+https://github.com/pybricks/pybricks-api@master
