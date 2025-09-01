@@ -114,6 +114,7 @@ CONSTANTS = {
     "GREEN_S_MIN": 38,
 }
 # pedram
+# pedram 2
 ports = {
     "left_drive": Port.E,
     "right_drive": Port.C,
