@@ -112,6 +112,27 @@ CONSTANTS = {
     "GREEN_HUE_MIN": 148,
     "GREEN_HUE_MAX": 178,
     "GREEN_S_MIN": 38,
+    # Yellow shortcut detection & execution
+    "YELLOW_SHORTCUT_MIN_SCORE": 0.35,
+    "YELLOW_SHORTCUT_CONFIRM": 3,
+    "YELLOW_SHORTCUT_COOLDOWN_MS": 1500,
+    # Yellow follow persistence after shortcut
+    "YELLOW_FOLLOW_SEEK_MS": 2500,
+    "YELLOW_FOLLOW_STICKY_MS": 1200,
+    # Gridlock navigation constants
+    "GRIDLOCK_ALIGN_ATTEMPTS": 8,
+    "GRIDLOCK_ALIGN_TURN_DEG": 10,
+    "GRIDLOCK_LINE_HIT_CONFIRM": 2,
+    "GRIDLOCK_HEADING_TOL": 8,
+    "GRIDLOCK_STOP_MS": 200,
+    "GRIDLOCK_ROCK_STEP_MM": 15,
+    "GRIDLOCK_DRIVE_SPEED": 120,
+    "GRIDLOCK_FOLLOW_TIMEOUT_MS": 12000,
+    "GRIDLOCK_TURN_ANGLE_90": 90,
+    "GRIDLOCK_CENTER_FINE_STEP_MM": 6,
+    "GRIDLOCK_CENTER_MAX_STEPS": 6,
+    "GRIDLOCK_ALIGN_BLACK_CONFIRM": 3,
+    "GRIDLOCK_INTERSECTION_CONFIRM": 3,
 }
 # aahaan
 # vivek
@@ -206,6 +227,155 @@ class Robot:
         self._green_right_count = 0
         self._spill_cooldown_until = 0
         self._spill_retry_backoff_ms = CONSTANTS.get("SPILL_RETRY_COOLDOWN_MS", 1200)
+        # Yellow detection beep throttle
+        self._last_yellow_beep_ms = 0
+        # Yellow follow lock/persistence around shortcuts
+        self._yellow_follow_active = False
+        self._yellow_lock_until = 0
+        self._yellow_last_seen_ms = 0
+        # Yellow shortcut detection state
+        self._yshortcut_left_count = 0
+        self._yshortcut_right_count = 0
+        self._yellow_shortcut_cooldown_until = 0
+
+    # ========== GRIDLOCK HELPERS ==========
+    def gridlock_snap_heading(self, force=False):
+        """Snap IMU heading to nearest cardinal (0, 90, -90, 180) when within tolerance.
+        If force=True, always snap to the nearest cardinal without checking tolerance."""
+        try:
+            h = self.hub.imu.heading()
+        except Exception:
+            return
+        cardinals = [0, 90, -90, 180, -180]
+        # Distance on a circle
+        def ang_diff(a, b):
+            return abs(((a - b + 180) % 360) - 180)
+        cardinal = min(cardinals, key=lambda c: ang_diff(h, c))
+        err = ang_diff(h, cardinal)
+        if err < float(CONSTANTS.get("GRIDLOCK_HEADING_TOL", 8)) or force:
+            try:
+                self.hub.imu.reset_heading(cardinal)
+            except Exception:
+                pass
+
+    def gridlock_snap_heading_turn(self, tolerance_deg=None):
+        """Physically turn to nearest cardinal if within tolerance, then snap IMU."""
+        if tolerance_deg is None:
+            tolerance_deg = CONSTANTS.get("GRIDLOCK_HEADING_TOL", 8)
+        try:
+            current = self.hub.imu.heading()
+        except Exception:
+            return
+        cardinals = [0, 90, -90, 180, -180]
+        def ang_diff(a, b):
+            return abs(((a - b + 180) % 360) - 180)
+        target = min(cardinals, key=lambda c: ang_diff(current, c))
+        delta = self.normalize_angle(target - current)
+        if abs(delta) <= float(tolerance_deg) * 2:
+            self.sharp_turn_in_degrees(delta, wait=True)
+            self.gridlock_snap_heading(force=True)
+
+    def gridlock_check_black_both(self, confirm_cycles=2):
+        """Return True if both color sensors read black reflectance for confirm_cycles in a row."""
+        thr = int(CONSTANTS.get("LINE_BLACK_REF_THRESHOLD", 39))
+        for _ in range(max(1, int(confirm_cycles))):
+            try:
+                l = self.color_sensor_left.reflection() < thr
+                r = self.color_sensor_right.reflection() < thr
+            except Exception:
+                return False
+            if not (l and r):
+                return False
+            wait(10)
+        return True
+
+    def gridlock_align_on_intersection(self):
+        """Gently pivot and rock to align on an intersection until both sensors see black reliably."""
+        self.drivebase.stop()
+        wait(CONSTANTS.get("GRIDLOCK_STOP_MS", 200))
+        pivot = int(CONSTANTS.get("GRIDLOCK_ALIGN_TURN_DEG", 8))
+        rock_step = int(CONSTANTS.get("GRIDLOCK_ROCK_STEP_MM", 15))
+        confirm = int(CONSTANTS.get("GRIDLOCK_ALIGN_BLACK_CONFIRM", 3))
+        attempts = int(CONSTANTS.get("GRIDLOCK_ALIGN_ATTEMPTS", 6))
+        for _ in range(attempts):
+            if self.gridlock_check_black_both(confirm):
+                break
+            # Small left-right-left pivot
+            self.sharp_turn_in_degrees(-pivot, wait=True)
+            if self.gridlock_check_black_both(confirm):
+                break
+            self.sharp_turn_in_degrees(2 * pivot, wait=True)
+            if self.gridlock_check_black_both(confirm):
+                break
+            self.sharp_turn_in_degrees(-pivot, wait=True)
+            if self.gridlock_check_black_both(confirm):
+                break
+            # Gentle forward-back rock
+            self.move_forward(rock_step)
+            if self.gridlock_check_black_both(confirm):
+                break
+            self.move_forward(-2 * rock_step)
+            if self.gridlock_check_black_both(confirm):
+                break
+            self.move_forward(rock_step)
+        self.drivebase.stop()
+        wait(CONSTANTS.get("GRIDLOCK_STOP_MS", 200))
+        self.gridlock_snap_heading_turn()
+
+    def gridlock_nudge_center(self):
+        """Small forward/back nudges to center on the intersection."""
+        step = int(CONSTANTS.get("GRIDLOCK_CENTER_FINE_STEP_MM", 6))
+        max_steps = int(CONSTANTS.get("GRIDLOCK_CENTER_MAX_STEPS", 6))
+        confirm = int(CONSTANTS.get("GRIDLOCK_INTERSECTION_CONFIRM", 3))
+        for _ in range(max_steps):
+            if self.gridlock_check_black_both(confirm):
+                return True
+            self.move_forward(step)
+            if self.gridlock_check_black_both(confirm):
+                return True
+            self.move_forward(-2 * step)
+            if self.gridlock_check_black_both(confirm):
+                return True
+            self.move_forward(step)
+        return False
+
+    def gridlock_turn_90(self, direction="right"):
+        """Turn 90° left/right, then re-align and re-snap to the grid."""
+        d = int(CONSTANTS.get("GRIDLOCK_TURN_ANGLE_90", 90))
+        angle = d if direction == "right" else -d
+        self.sharp_turn_in_degrees(angle, wait=True)
+        wait(CONSTANTS.get("GRIDLOCK_STOP_MS", 200))
+        self.gridlock_align_on_intersection()
+        self.gridlock_snap_heading_turn()
+
+    def gridlock_drive_to_next_intersection(self):
+        """Follow line to next intersection (both sensors black), then align and correct heading."""
+        # Set controlled approach speed
+        try:
+            ss, sa, tr, ta = self.drivebase.settings()
+        except Exception:
+            ss = CONSTANTS.get("DEFAULT_SPEED", 170)
+        approach_speed = int(CONSTANTS.get("GRIDLOCK_DRIVE_SPEED", ss))
+        self.drivebase.settings(straight_speed=approach_speed)
+        timeout_ms = int(CONSTANTS.get("GRIDLOCK_FOLLOW_TIMEOUT_MS", 12000))
+        start = self.clock.time()
+        found = False
+        while self.clock.time() - start < timeout_ms:
+            self.get_colors()
+            self.follow_line()
+            if self.gridlock_check_black_both(CONSTANTS.get("GRIDLOCK_INTERSECTION_CONFIRM", 3)):
+                found = True
+                break
+            wait(8)
+        self.drivebase.stop()
+        wait(CONSTANTS.get("GRIDLOCK_STOP_MS", 200))
+        if found:
+            self.gridlock_align_on_intersection()
+            self.gridlock_nudge_center()
+            self.gridlock_snap_heading_turn()
+        # Restore default drive settings
+        self.settings_default()
+        return found
 
     # --- helpers ---
     def drive_with_bias(self, speed_mm_s, turn_deg_s):
@@ -619,13 +789,19 @@ class Robot:
             if self.yellow_black_confirm >= int(CONSTANTS.get("YELLOW_BLACK_CONFIRM", 2)):
                 self.yellow_black_confirm = 0
                 self.shortcut_information["is following shortcut"] = False
+                # Clear any yellow-follow lock and return to normal line
+                self._yellow_follow_active = False
                 self.align_to_line_in_place(timeout_ms=1200, err_tol=3)
                 self.robot_state = "line"
 
     def execute_yellow_shortcut(self, direction):
+        """Hard-coded corner cut: turn, straight, turn; then handoff to yellow-line follow.
+        Does not realign to black/grid immediately; instead locks into yellow-follow seek mode
+        and lets follow_yellow() handle tracking and exit to black when yellow ends."""
         deg = int(CONSTANTS.get("YELLOW_SHORTCUT_TURN_DEG", 90))
         step = int(CONSTANTS.get("YELLOW_SHORTCUT_STEP_MM", 200))
         self.stop_motors()
+        self.shortcut_information["is following shortcut"] = True
         if direction == "right":
             first, second, final = -deg, +deg, -deg
         else:
@@ -635,12 +811,14 @@ class Robot:
         self.sharp_turn_in_degrees(second)
         self.move_forward(step)
         self.sharp_turn_in_degrees(final)
-        try:
-            self.align_to_line_in_place(timeout_ms=1200, err_tol=4)
-        except Exception:
-            pass
+        # Prepare yellow-follow lock and enter yellow line state
+        now = self.clock.time()
+        self._yellow_follow_active = True
+        self._yellow_lock_until = now + int(CONSTANTS.get("YELLOW_FOLLOW_SEEK_MS", 2500))
+        self._yellow_last_seen_ms = 0
         self.shortcut_information["is following shortcut"] = False
-        self.robot_state = "line"
+        self._yellow_shortcut_cooldown_until = now + int(CONSTANTS.get("YELLOW_SHORTCUT_COOLDOWN_MS", 1500))
+        self.robot_state = "yellow line"
 
     def turn_and_detect_ultrasonic(self, degrees=360):
         lowest_ultrasonic = 9999
@@ -1230,11 +1408,66 @@ class Robot:
             self.robot_state = "obstacle"
             return
 
-        elif ALLOW_YELLOW and ((self.left_color == Color.YELLOW) ^ (self.right_color == Color.YELLOW)):
-            if self.left_color == Color.YELLOW:
-                self.robot_state = "yellow-right"
+        elif ALLOW_YELLOW:
+            # Yellow shortcut detection (priority) and yellow-line fallback
+            y_left = (self.left_color == Color.YELLOW)
+            y_right = (self.right_color == Color.YELLOW)
+            raw_y_l = self.yellow_score(self.left_color_sensor_information)
+            raw_y_r = self.yellow_score(self.right_color_sensor_information)
+            self.y_l_score = raw_y_l
+            self.y_r_score = raw_y_r
+            min_score = float(CONSTANTS.get("YELLOW_SHORTCUT_MIN_SCORE", 0.35))
+            confirm_need = int(CONSTANTS.get("YELLOW_SHORTCUT_CONFIRM", 3))
+            now = self.clock.time()
+            cooldown_ok = (now >= self._yellow_shortcut_cooldown_until)
+
+            # Beep when yellow is detected by either sensor (throttled)
+            if (y_left or y_right) and CONSTANTS.get("SOUNDS_ENABLED", True):
+                if now - getattr(self, "_last_yellow_beep_ms", 0) >= 150:
+                    try:
+                        self.hub.speaker.beep(1150, 25)
+                    except Exception:
+                        pass
+                    self._last_yellow_beep_ms = now
+
+            # During yellow-follow lock (after shortcut), force yellow-line state
+            if getattr(self, "_yellow_follow_active", False):
+                if y_left or y_right:
+                    self._yellow_last_seen_ms = now
+                    self.robot_state = "yellow line"
+                    return
+                # Within seek window or within sticky timeout after last seen -> keep yellow-follow
+                if (now < getattr(self, "_yellow_lock_until", 0)) or (
+                    now - getattr(self, "_yellow_last_seen_ms", 0) < int(CONSTANTS.get("YELLOW_FOLLOW_STICKY_MS", 1200))
+                ):
+                    self.robot_state = "yellow line"
+                    return
+                # Otherwise give up and clear lock, then fall-through to normal logic
+                self._yellow_follow_active = False
+
+            # Only shortcut on XOR-yellow; other side must not be black to reduce false triggers
+            candidate_left = y_left and (not y_right) and (raw_y_l >= min_score) and (self.right_color != Color.BLACK)
+            candidate_right = y_right and (not y_left) and (raw_y_r >= min_score) and (self.left_color != Color.BLACK)
+
+            self._yshortcut_left_count = (self._yshortcut_left_count + 1) if candidate_left else 0
+            self._yshortcut_right_count = (self._yshortcut_right_count + 1) if candidate_right else 0
+
+            if cooldown_ok and (self._yshortcut_left_count >= confirm_need or self._yshortcut_right_count >= confirm_need):
+                # Preserve original semantics: left sensor => turn right; right sensor => turn left
+                if self._yshortcut_left_count >= confirm_need:
+                    self.robot_state = "yellow-right"
+                else:
+                    self.robot_state = "yellow-left"
+                self._yshortcut_left_count = 0
+                self._yshortcut_right_count = 0
+                self.shortcut_information["is following shortcut"] = True
+                return
+
+            # If seeing yellow but not confident for shortcut, follow the yellow line
+            if y_left or y_right:
+                self.robot_state = "yellow line"
             else:
-                self.robot_state = "yellow-left"
+                self.robot_state = "line"
 
         elif (
             not self.shortcut_information["is following shortcut"]
@@ -1281,6 +1514,8 @@ class Robot:
             self.execute_yellow_shortcut("left")
         elif self.robot_state == "yellow-right":
             self.execute_yellow_shortcut("right")
+        elif self.robot_state == "yellow line":
+            self.follow_yellow()
         elif self.robot_state == "line":
             self.follow_line()
         elif self.robot_state == "green left":
@@ -1322,4 +1557,4 @@ def main():
 
 if __name__ == "__main__":
     main()
-vivek
+#vivek
