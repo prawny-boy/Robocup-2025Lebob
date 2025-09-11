@@ -119,6 +119,10 @@ CONSTANTS = {
     # Yellow follow persistence after shortcut
     "YELLOW_FOLLOW_SEEK_MS": 2500,
     "YELLOW_FOLLOW_STICKY_MS": 1200,
+    # Inverted (white line on black background)
+    "INVERTED_WHITE_REF_MIN": 70,
+    "INVERTED_ENTER_CONFIRM": 3,
+    "INVERTED_EXIT_CONFIRM": 3,
     # Gridlock navigation constants
     "GRIDLOCK_ALIGN_ATTEMPTS": 8,
     "GRIDLOCK_ALIGN_TURN_DEG": 10,
@@ -237,6 +241,10 @@ class Robot:
         self._yshortcut_left_count = 0
         self._yshortcut_right_count = 0
         self._yellow_shortcut_cooldown_until = 0
+        # Inverted (white-on-black) follow state
+        self._inverted_mode = False
+        self._inv_white_count = 0
+        self._inv_exit_count = 0
 
     # ========== GRIDLOCK HELPERS ==========
     def gridlock_snap_heading(self, force=False):
@@ -719,6 +727,32 @@ class Robot:
         err_scale = min(1.0, abs(error) / max(1, CONSTANTS["CORNER_ERR_THRESHOLD"]))
         base_speed = CONSTANTS["MOVE_SPEED"]
         speed = max(CONSTANTS["LINE_MIN_SPEED"], int(base_speed * (1 - 0.4 * err_scale)))
+
+        self.drive_with_bias(speed, turn_rate)
+
+    def follow_line_inverted(self):
+        """Follow a white line on black background using PD, preferring max reflectance."""
+        left_ref = self.left_color_sensor_information["reflection"]
+        right_ref = self.right_color_sensor_information["reflection"]
+
+        # Steer towards brighter side to keep white line centered
+        error = right_ref - left_ref
+
+        kp = CONSTANTS.get("LINE_KP", 3.0)
+        kd = CONSTANTS.get("LINE_KD", 18.0)
+        d_err = error - getattr(self, "prev_error_inv", 0)
+        self.prev_error_inv = error
+        turn_rate = kp * error + kd * d_err
+
+        max_turn = CONSTANTS.get("LINE_MAX_TURN_RATE", 320)
+        if turn_rate > max_turn:
+            turn_rate = max_turn
+        elif turn_rate < -max_turn:
+            turn_rate = -max_turn
+
+        err_scale = min(1.0, abs(error) / max(1, CONSTANTS.get("CORNER_ERR_THRESHOLD", 13)))
+        base_speed = CONSTANTS.get("MOVE_SPEED", 120)
+        speed = max(CONSTANTS.get("LINE_MIN_SPEED", 80), int(base_speed * (1 - 0.4 * err_scale)))
 
         self.drive_with_bias(speed, turn_rate)
 
@@ -1466,8 +1500,39 @@ class Robot:
             # If seeing yellow but not confident for shortcut, follow the yellow line
             if y_left or y_right:
                 self.robot_state = "yellow line"
+                return
+
+            # No yellow: check for inverted (white on black) tile behavior
+            l_ref = self.left_color_sensor_information["reflection"]
+            r_ref = self.right_color_sensor_information["reflection"]
+            wthr = int(CONSTANTS.get("INVERTED_WHITE_REF_MIN", 70))
+            both_white = (l_ref >= wthr and r_ref >= wthr)
+            if both_white:
+                self._inv_white_count += 1
             else:
-                self.robot_state = "line"
+                self._inv_white_count = 0
+
+            if self._inverted_mode:
+                # Exit inverted when both sensors are below white threshold for N cycles
+                if not both_white:
+                    self._inv_exit_count += 1
+                else:
+                    self._inv_exit_count = 0
+                if self._inv_exit_count >= int(CONSTANTS.get("INVERTED_EXIT_CONFIRM", 3)):
+                    self._inverted_mode = False
+                    self._inv_exit_count = 0
+                else:
+                    self.robot_state = "inverted line"
+                    return
+
+            # Enter inverted if sustained white detected
+            if self._inv_white_count >= int(CONSTANTS.get("INVERTED_ENTER_CONFIRM", 3)):
+                self._inverted_mode = True
+                self.robot_state = "inverted line"
+                return
+
+            # Default to normal line following
+            self.robot_state = "line"
 
         elif (
             not self.shortcut_information["is following shortcut"]
@@ -1516,6 +1581,8 @@ class Robot:
             self.execute_yellow_shortcut("right")
         elif self.robot_state == "yellow line":
             self.follow_yellow()
+        elif self.robot_state == "inverted line":
+            self.follow_line_inverted()
         elif self.robot_state == "line":
             self.follow_line()
         elif self.robot_state == "green left":
