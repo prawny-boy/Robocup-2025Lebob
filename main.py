@@ -112,6 +112,20 @@ CONSTANTS = {
     "GREEN_HUE_MIN": 148,
     "GREEN_HUE_MAX": 178,
     "GREEN_S_MIN": 38,
+    # Yellow shortcut robustness + follow tuning
+    "YELLOW_SHORTCUT_MIN_SCORE": 0.32,
+    "YELLOW_SHORTCUT_CONFIRM": 3,
+    "YELLOW_SHORTCUT_COOLDOWN_MS": 1200,
+    "YELLOW_KP": 3.4,
+    "YELLOW_KI": 0.02,
+    "YELLOW_KD": 16.0,
+    "YELLOW_MAX_TURN_RATE": 300,
+    "YELLOW_BASE_SPEED": 150,
+    "YELLOW_MIN_SPEED": 90,
+    "YELLOW_ERR_SCALE": 55,
+    "YELLOW_DERIV_ALPHA": 0.25,
+    "YELLOW_EXIT_SCORE": 0.09,
+    "YELLOW_BLACK_CONFIRM": 2,
     # Gridlock navigation constants
     "GRIDLOCK_ALIGN_ATTEMPTS": 8,
     "GRIDLOCK_ALIGN_TURN_DEG": 10,
@@ -220,6 +234,10 @@ class Robot:
         self._green_right_count = 0
         self._spill_cooldown_until = 0
         self._spill_retry_backoff_ms = CONSTANTS.get("SPILL_RETRY_COOLDOWN_MS", 1200)
+        # Yellow shortcut detection counters and cooldown
+        self._yshortcut_left_count = 0
+        self._yshortcut_right_count = 0
+        self._yellow_shortcut_cooldown_until = 0
 
     # ========== GRIDLOCK HELPERS ==========
     def gridlock_snap_heading(self, force=False):
@@ -762,7 +780,9 @@ class Robot:
 
         self.drive_with_bias(speed, turn)
 
-        y_exit = float(CONSTANTS.get("YELLOW_EXIT_SCORE", 0.08))
+        # Robust, minimal-exit logic: when both scores low and sensors see black,
+        # finalize rejoin to the main line. No search performed.
+        y_exit = float(CONSTANTS.get("YELLOW_EXIT_SCORE", 0.09))
         if raw_y_l < y_exit and raw_y_r < y_exit:
             on_black = (self.left_color == Color.BLACK) or (self.right_color == Color.BLACK)
             if on_black:
@@ -776,6 +796,9 @@ class Robot:
                 self.robot_state = "line"
 
     def execute_yellow_shortcut(self, direction):
+        """Deterministic corner cut onto the yellow branch, then hand off to yellow follow.
+        Sequence: sharp turn -> straight -> sharp turn -> straight -> begin yellow follow.
+        No recovery/search is performed here by design."""
         deg = int(CONSTANTS.get("YELLOW_SHORTCUT_TURN_DEG", 90))
         step = int(CONSTANTS.get("YELLOW_SHORTCUT_STEP_MM", 200))
         self.stop_motors()
@@ -788,12 +811,11 @@ class Robot:
         self.sharp_turn_in_degrees(second)
         self.move_forward(step)
         self.sharp_turn_in_degrees(final)
-        try:
-            self.align_to_line_in_place(timeout_ms=1200, err_tol=4)
-        except Exception:
-            pass
+        # Immediately switch to following the yellow branch; rejoin handled by follow_yellow exit
         self.shortcut_information["is following shortcut"] = False
-        self.robot_state = "line"
+        # Small cooldown to avoid immediate retrigger while on the branch
+        self._yellow_shortcut_cooldown_until = self.clock.time() + int(CONSTANTS.get("YELLOW_SHORTCUT_COOLDOWN_MS", 1200))
+        self.robot_state = "yellow line"
 
     def turn_and_detect_ultrasonic(self, degrees=360):
         lowest_ultrasonic = 9999
@@ -1383,11 +1405,37 @@ class Robot:
             self.robot_state = "obstacle"
             return
 
-        elif ALLOW_YELLOW and ((self.left_color == Color.YELLOW) ^ (self.right_color == Color.YELLOW)):
-            if self.left_color == Color.YELLOW:
-                self.robot_state = "yellow-right"
-            else:
-                self.robot_state = "yellow-left"
+        # Only enter yellow branch when yellow is actually detected.
+        elif ALLOW_YELLOW and ((self.left_color == Color.YELLOW) or (self.right_color == Color.YELLOW)):
+            # Improved yellow branch detection with score + confirmation.
+            y_left = (self.left_color == Color.YELLOW)
+            y_right = (self.right_color == Color.YELLOW)
+            raw_y_l = self.yellow_score(self.left_color_sensor_information)
+            raw_y_r = self.yellow_score(self.right_color_sensor_information)
+            min_score = float(CONSTANTS.get("YELLOW_SHORTCUT_MIN_SCORE", 0.32))
+            confirm_need = int(CONSTANTS.get("YELLOW_SHORTCUT_CONFIRM", 3))
+            now = self.clock.time()
+            cooldown_ok = (now >= getattr(self, "_yellow_shortcut_cooldown_until", 0))
+
+            candidate_left = y_left and (raw_y_l >= min_score) and (not y_right)
+            candidate_right = y_right and (raw_y_r >= min_score) and (not y_left)
+
+            self._yshortcut_left_count = (self._yshortcut_left_count + 1) if candidate_left else 0
+            self._yshortcut_right_count = (self._yshortcut_right_count + 1) if candidate_right else 0
+
+            if cooldown_ok and (self._yshortcut_left_count >= confirm_need or self._yshortcut_right_count >= confirm_need):
+                # Maintain original semantics: left sensor branch => turn right; right sensor => left.
+                if self._yshortcut_left_count >= confirm_need:
+                    self.robot_state = "yellow-right"
+                else:
+                    self.robot_state = "yellow-left"
+                self._yshortcut_left_count = 0
+                self._yshortcut_right_count = 0
+                return
+
+            # If already on the yellow path (either sensor sees yellow), follow it directly.
+            if y_left or y_right:
+                self.robot_state = "yellow line"
 
         elif (
             not self.shortcut_information["is following shortcut"]
@@ -1434,6 +1482,8 @@ class Robot:
             self.execute_yellow_shortcut("left")
         elif self.robot_state == "yellow-right":
             self.execute_yellow_shortcut("right")
+        elif self.robot_state == "yellow line":
+            self.follow_yellow()
         elif self.robot_state == "line":
             self.follow_line()
         elif self.robot_state == "green left":
