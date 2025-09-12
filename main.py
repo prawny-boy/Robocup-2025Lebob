@@ -115,6 +115,9 @@ CONSTANTS = {
     "GRIDLOCK_CENTER_MAX_STEPS": 6,
     "GRIDLOCK_ALIGN_BLACK_CONFIRM": 3,
     "GRIDLOCK_INTERSECTION_CONFIRM": 3,
+    # Gridlock final wiggle
+    "GRIDLOCK_WIGGLE_DEG": 6,
+    "GRIDLOCK_WIGGLE_STEPS": 2,
 }
 # aahaan
 # vivek
@@ -259,18 +262,21 @@ class Robot:
             wait(10)
         return True
 
-    def gridlock_align_on_intersection(self):
-        """Gently pivot and rock to align on an intersection until both sensors see black reliably."""
+    def gridlock_align_on_intersection(self, final=False):
+        """Align tightly on an intersection using pivots and nudges.
+        If final=True, finish with a short wiggle scan for green before continuing."""
         self.drivebase.stop()
         wait(CONSTANTS.get("GRIDLOCK_STOP_MS", 200))
+
         pivot = int(CONSTANTS.get("GRIDLOCK_ALIGN_TURN_DEG", 8))
         rock_step = int(CONSTANTS.get("GRIDLOCK_ROCK_STEP_MM", 15))
         confirm = int(CONSTANTS.get("GRIDLOCK_ALIGN_BLACK_CONFIRM", 3))
         attempts = int(CONSTANTS.get("GRIDLOCK_ALIGN_ATTEMPTS", 6))
+
+        # Coarse alignment loop: pivot L-R-L, then rock F-B-F
         for _ in range(attempts):
             if self.gridlock_check_black_both(confirm):
                 break
-            # Small left-right-left pivot
             self.sharp_turn_in_degrees(-pivot, wait=True)
             if self.gridlock_check_black_both(confirm):
                 break
@@ -280,7 +286,6 @@ class Robot:
             self.sharp_turn_in_degrees(-pivot, wait=True)
             if self.gridlock_check_black_both(confirm):
                 break
-            # Gentle forward-back rock
             self.move_forward(rock_step)
             if self.gridlock_check_black_both(confirm):
                 break
@@ -288,9 +293,20 @@ class Robot:
             if self.gridlock_check_black_both(confirm):
                 break
             self.move_forward(rock_step)
+
+        # Fine centering: small nudges until stable
+        self.gridlock_nudge_center()
+
         self.drivebase.stop()
         wait(CONSTANTS.get("GRIDLOCK_STOP_MS", 200))
         self.gridlock_snap_heading_turn()
+
+        # Optional final wiggle to hunt for green without changing thresholds
+        if final:
+            try:
+                self.gridlock_scan_green_wiggle()
+            except Exception:
+                pass
 
     def gridlock_nudge_center(self):
         """Small forward/back nudges to center on the intersection."""
@@ -307,6 +323,37 @@ class Robot:
             if self.gridlock_check_black_both(confirm):
                 return True
             self.move_forward(step)
+        return False
+
+    def gridlock_scan_green_wiggle(self, wiggle_deg=None, steps=None):
+        """Short left/right wiggle to catch green at a final intersection.
+        Stops if both sensors read green; otherwise keeps orientation roughly centered."""
+        if wiggle_deg is None:
+            wiggle_deg = int(CONSTANTS.get("GRIDLOCK_WIGGLE_DEG", 6))
+        if steps is None:
+            steps = int(CONSTANTS.get("GRIDLOCK_WIGGLE_STEPS", 2))
+
+        def both_green():
+            self.get_colors()
+            return (self.left_color == Color.GREEN and self.right_color == Color.GREEN)
+
+        if both_green():
+            self.drivebase.stop()
+            return True
+
+        for _ in range(max(1, steps)):
+            self.sharp_turn_in_degrees(+wiggle_deg, wait=True)
+            if both_green():
+                self.drivebase.stop()
+                return True
+            self.sharp_turn_in_degrees(-2 * wiggle_deg, wait=True)
+            if both_green():
+                self.drivebase.stop()
+                return True
+            self.sharp_turn_in_degrees(+wiggle_deg, wait=True)
+            if both_green():
+                self.drivebase.stop()
+                return True
         return False
 
     def gridlock_turn_90(self, direction="right"):
