@@ -112,17 +112,6 @@ CONSTANTS = {
     "GREEN_HUE_MIN": 148,
     "GREEN_HUE_MAX": 178,
     "GREEN_S_MIN": 38,
-    # Yellow shortcut detection & execution
-    "YELLOW_SHORTCUT_MIN_SCORE": 0.35,
-    "YELLOW_SHORTCUT_CONFIRM": 3,
-    "YELLOW_SHORTCUT_COOLDOWN_MS": 1500,
-    # Yellow follow persistence after shortcut
-    "YELLOW_FOLLOW_SEEK_MS": 2500,
-    "YELLOW_FOLLOW_STICKY_MS": 1200,
-    # Inverted (white line on black background)
-    "INVERTED_WHITE_REF_MIN": 70,
-    "INVERTED_ENTER_CONFIRM": 3,
-    "INVERTED_EXIT_CONFIRM": 3,
     # Gridlock navigation constants
     "GRIDLOCK_ALIGN_ATTEMPTS": 8,
     "GRIDLOCK_ALIGN_TURN_DEG": 10,
@@ -231,20 +220,6 @@ class Robot:
         self._green_right_count = 0
         self._spill_cooldown_until = 0
         self._spill_retry_backoff_ms = CONSTANTS.get("SPILL_RETRY_COOLDOWN_MS", 1200)
-        # Yellow detection beep throttle
-        self._last_yellow_beep_ms = 0
-        # Yellow follow lock/persistence around shortcuts
-        self._yellow_follow_active = False
-        self._yellow_lock_until = 0
-        self._yellow_last_seen_ms = 0
-        # Yellow shortcut detection state
-        self._yshortcut_left_count = 0
-        self._yshortcut_right_count = 0
-        self._yellow_shortcut_cooldown_until = 0
-        # Inverted (white-on-black) follow state
-        self._inverted_mode = False
-        self._inv_white_count = 0
-        self._inv_exit_count = 0
 
     # ========== GRIDLOCK HELPERS ==========
     def gridlock_snap_heading(self, force=False):
@@ -730,32 +705,6 @@ class Robot:
 
         self.drive_with_bias(speed, turn_rate)
 
-    def follow_line_inverted(self):
-        """Follow a white line on black background using PD, preferring max reflectance."""
-        left_ref = self.left_color_sensor_information["reflection"]
-        right_ref = self.right_color_sensor_information["reflection"]
-
-        # Steer towards brighter side to keep white line centered
-        error = right_ref - left_ref
-
-        kp = CONSTANTS.get("LINE_KP", 3.0)
-        kd = CONSTANTS.get("LINE_KD", 18.0)
-        d_err = error - getattr(self, "prev_error_inv", 0)
-        self.prev_error_inv = error
-        turn_rate = kp * error + kd * d_err
-
-        max_turn = CONSTANTS.get("LINE_MAX_TURN_RATE", 320)
-        if turn_rate > max_turn:
-            turn_rate = max_turn
-        elif turn_rate < -max_turn:
-            turn_rate = -max_turn
-
-        err_scale = min(1.0, abs(error) / max(1, CONSTANTS.get("CORNER_ERR_THRESHOLD", 13)))
-        base_speed = CONSTANTS.get("MOVE_SPEED", 120)
-        speed = max(CONSTANTS.get("LINE_MIN_SPEED", 80), int(base_speed * (1 - 0.4 * err_scale)))
-
-        self.drive_with_bias(speed, turn_rate)
-
     def follow_yellow(self):
         y_left = (self.left_color == Color.YELLOW)
         y_right = (self.right_color == Color.YELLOW)
@@ -823,19 +772,13 @@ class Robot:
             if self.yellow_black_confirm >= int(CONSTANTS.get("YELLOW_BLACK_CONFIRM", 2)):
                 self.yellow_black_confirm = 0
                 self.shortcut_information["is following shortcut"] = False
-                # Clear any yellow-follow lock and return to normal line
-                self._yellow_follow_active = False
                 self.align_to_line_in_place(timeout_ms=1200, err_tol=3)
                 self.robot_state = "line"
 
     def execute_yellow_shortcut(self, direction):
-        """Hard-coded corner cut: turn, straight, turn; then handoff to yellow-line follow.
-        Does not realign to black/grid immediately; instead locks into yellow-follow seek mode
-        and lets follow_yellow() handle tracking and exit to black when yellow ends."""
         deg = int(CONSTANTS.get("YELLOW_SHORTCUT_TURN_DEG", 90))
         step = int(CONSTANTS.get("YELLOW_SHORTCUT_STEP_MM", 200))
         self.stop_motors()
-        self.shortcut_information["is following shortcut"] = True
         if direction == "right":
             first, second, final = -deg, +deg, -deg
         else:
@@ -845,14 +788,12 @@ class Robot:
         self.sharp_turn_in_degrees(second)
         self.move_forward(step)
         self.sharp_turn_in_degrees(final)
-        # Prepare yellow-follow lock and enter yellow line state
-        now = self.clock.time()
-        self._yellow_follow_active = True
-        self._yellow_lock_until = now + int(CONSTANTS.get("YELLOW_FOLLOW_SEEK_MS", 2500))
-        self._yellow_last_seen_ms = 0
+        try:
+            self.align_to_line_in_place(timeout_ms=1200, err_tol=4)
+        except Exception:
+            pass
         self.shortcut_information["is following shortcut"] = False
-        self._yellow_shortcut_cooldown_until = now + int(CONSTANTS.get("YELLOW_SHORTCUT_COOLDOWN_MS", 1500))
-        self.robot_state = "yellow line"
+        self.robot_state = "line"
 
     def turn_and_detect_ultrasonic(self, degrees=360):
         lowest_ultrasonic = 9999
@@ -1442,97 +1383,11 @@ class Robot:
             self.robot_state = "obstacle"
             return
 
-        elif ALLOW_YELLOW:
-            # Yellow shortcut detection (priority) and yellow-line fallback
-            y_left = (self.left_color == Color.YELLOW)
-            y_right = (self.right_color == Color.YELLOW)
-            raw_y_l = self.yellow_score(self.left_color_sensor_information)
-            raw_y_r = self.yellow_score(self.right_color_sensor_information)
-            self.y_l_score = raw_y_l
-            self.y_r_score = raw_y_r
-            min_score = float(CONSTANTS.get("YELLOW_SHORTCUT_MIN_SCORE", 0.35))
-            confirm_need = int(CONSTANTS.get("YELLOW_SHORTCUT_CONFIRM", 3))
-            now = self.clock.time()
-            cooldown_ok = (now >= self._yellow_shortcut_cooldown_until)
-
-            # Beep when yellow is detected by either sensor (throttled)
-            if (y_left or y_right) and CONSTANTS.get("SOUNDS_ENABLED", True):
-                if now - getattr(self, "_last_yellow_beep_ms", 0) >= 150:
-                    try:
-                        self.hub.speaker.beep(1150, 25)
-                    except Exception:
-                        pass
-                    self._last_yellow_beep_ms = now
-
-            # During yellow-follow lock (after shortcut), force yellow-line state
-            if getattr(self, "_yellow_follow_active", False):
-                if y_left or y_right:
-                    self._yellow_last_seen_ms = now
-                    self.robot_state = "yellow line"
-                    return
-                # Within seek window or within sticky timeout after last seen -> keep yellow-follow
-                if (now < getattr(self, "_yellow_lock_until", 0)) or (
-                    now - getattr(self, "_yellow_last_seen_ms", 0) < int(CONSTANTS.get("YELLOW_FOLLOW_STICKY_MS", 1200))
-                ):
-                    self.robot_state = "yellow line"
-                    return
-                # Otherwise give up and clear lock, then fall-through to normal logic
-                self._yellow_follow_active = False
-
-            # Only shortcut on XOR-yellow; other side must not be black to reduce false triggers
-            candidate_left = y_left and (not y_right) and (raw_y_l >= min_score) and (self.right_color != Color.BLACK)
-            candidate_right = y_right and (not y_left) and (raw_y_r >= min_score) and (self.left_color != Color.BLACK)
-
-            self._yshortcut_left_count = (self._yshortcut_left_count + 1) if candidate_left else 0
-            self._yshortcut_right_count = (self._yshortcut_right_count + 1) if candidate_right else 0
-
-            if cooldown_ok and (self._yshortcut_left_count >= confirm_need or self._yshortcut_right_count >= confirm_need):
-                # Preserve original semantics: left sensor => turn right; right sensor => turn left
-                if self._yshortcut_left_count >= confirm_need:
-                    self.robot_state = "yellow-right"
-                else:
-                    self.robot_state = "yellow-left"
-                self._yshortcut_left_count = 0
-                self._yshortcut_right_count = 0
-                self.shortcut_information["is following shortcut"] = True
-                return
-
-            # If seeing yellow but not confident for shortcut, follow the yellow line
-            if y_left or y_right:
-                self.robot_state = "yellow line"
-                return
-
-            # No yellow: check for inverted (white on black) tile behavior
-            l_ref = self.left_color_sensor_information["reflection"]
-            r_ref = self.right_color_sensor_information["reflection"]
-            wthr = int(CONSTANTS.get("INVERTED_WHITE_REF_MIN", 70))
-            both_white = (l_ref >= wthr and r_ref >= wthr)
-            if both_white:
-                self._inv_white_count += 1
+        elif ALLOW_YELLOW and ((self.left_color == Color.YELLOW) ^ (self.right_color == Color.YELLOW)):
+            if self.left_color == Color.YELLOW:
+                self.robot_state = "yellow-right"
             else:
-                self._inv_white_count = 0
-
-            if self._inverted_mode:
-                # Exit inverted when both sensors are below white threshold for N cycles
-                if not both_white:
-                    self._inv_exit_count += 1
-                else:
-                    self._inv_exit_count = 0
-                if self._inv_exit_count >= int(CONSTANTS.get("INVERTED_EXIT_CONFIRM", 3)):
-                    self._inverted_mode = False
-                    self._inv_exit_count = 0
-                else:
-                    self.robot_state = "inverted line"
-                    return
-
-            # Enter inverted if sustained white detected
-            if self._inv_white_count >= int(CONSTANTS.get("INVERTED_ENTER_CONFIRM", 3)):
-                self._inverted_mode = True
-                self.robot_state = "inverted line"
-                return
-
-            # Default to normal line following
-            self.robot_state = "line"
+                self.robot_state = "yellow-left"
 
         elif (
             not self.shortcut_information["is following shortcut"]
@@ -1579,10 +1434,6 @@ class Robot:
             self.execute_yellow_shortcut("left")
         elif self.robot_state == "yellow-right":
             self.execute_yellow_shortcut("right")
-        elif self.robot_state == "yellow line":
-            self.follow_yellow()
-        elif self.robot_state == "inverted line":
-            self.follow_line_inverted()
         elif self.robot_state == "line":
             self.follow_line()
         elif self.robot_state == "green left":
@@ -1624,4 +1475,4 @@ def main():
 
 if __name__ == "__main__":
     main()
-#vivek
+# vivek
