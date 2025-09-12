@@ -18,8 +18,8 @@ CONSTANTS = {
     "OBSTACLE_DETECT_CONFIRM": 4,       # consecutive reads to confirm obstacle
     "BLACK_WHEEL_SPEED": 30,
     # Optional: direct-drive trim to correct mechanical bias (1.00 = no change)
-    "LEFT_MOTOR_TRIM": 1.00,
-    "RIGHT_MOTOR_TRIM": 1.00,
+    "LEFT_MOTOR_TRIM": 1,
+    "RIGHT_MOTOR_TRIM": 1,
     "TURN_GREEN_DEGREES": 50,
     "BACK_AFTER_GREEN_TURN_DISTANCE": 40,
     "CURVE_RADIUS_GREEN": 78,
@@ -59,7 +59,7 @@ CONSTANTS = {
     "LINE_REACQUIRE_MAX_MM": 400,
     "LINE_REACQUIRE_BACK_MM": 50,
     # Robust line detection threshold (reflection) for reacquire
-    "LINE_BLACK_REF_THRESHOLD": 39,
+    "LINE_BLACK_REF_THRESHOLD": 36,
     "LINE_REACQUIRE_TURN_STEP_DEG": 10,
     "LINE_REACQUIRE_TURN_MAX_DEG": 120,
     "CAN_SEGMENT_MIN_POINTS": 4,
@@ -92,14 +92,14 @@ CONSTANTS = {
     # Straight-drive trim for manual straight helper. Keep small.
     "STRAIGHT_TURN_TRIM": 0,
     # Base global bias added to every drive() turn rate. Negative steers right.
-    "BASE_TURN_BIAS": -10,
+    "BASE_TURN_BIAS": 32,
     # Optional color calibration overrides
     "GRAY_REFLECTION_MIN": 60,
     
     # Green
-    "GREEN_HUE_MIN": 148,
-    "GREEN_HUE_MAX": 178,
-    "GREEN_S_MIN": 38,
+    "GREEN_HUE_MIN": 100,
+    "GREEN_HUE_MAX": 240,
+    "GREEN_S_MIN": 10,
     
     # Gridlock navigation constants
     "GRIDLOCK_ALIGN_ATTEMPTS": 8,
