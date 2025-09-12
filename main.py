@@ -4,9 +4,6 @@ from pybricks.robotics import DriveBase
 from pybricks.parameters import Port, Color, Axis, Direction, Button, Stop
 from pybricks.tools import StopWatch, wait
 
-# Enable/disable optional yellow-line shortcut behavior
-ALLOW_YELLOW = True
-
 # --- CONSTANTS ---
 CONSTANTS = {
     "DRIVEBASE_WHEEL_DIAMETER": 56,
@@ -25,7 +22,6 @@ CONSTANTS = {
     "RIGHT_MOTOR_TRIM": 1.00,
     "TURN_GREEN_DEGREES": 50,
     "BACK_AFTER_GREEN_TURN_DISTANCE": 40,
-    "TURN_YELLOW_DEGREES": 20,
     "CURVE_RADIUS_GREEN": 78,
     "CURVE_RADIUS_OBSTACLE": 160,
     "OBSTACLE_TURN_DEGREES": 175,
@@ -90,9 +86,6 @@ CONSTANTS = {
     "SPILL_RETRY_COOLDOWN_MS": 1200,
     # Obstacle reacquire guard
     "OBSTACLE_REACQUIRE_MAX_MM": 220,
-    # Yellow shortcut (deterministic sequence)
-    "YELLOW_SHORTCUT_TURN_DEG": 90,
-    "YELLOW_SHORTCUT_STEP_MM": 200,
     # Gyro/IMU behavior
     "GYRO_ENABLED": True,
     "IMU_STABILIZE_MS": 1200,
@@ -102,36 +95,12 @@ CONSTANTS = {
     "BASE_TURN_BIAS": -10,
     # Optional color calibration overrides
     "GRAY_REFLECTION_MIN": 60,
-    # Yellow (classification)
-    "YELLOW_HUE_MIN": 38,
-    "YELLOW_HUE_MAX": 62,
-    # Yellow scoring (follow_yellow)
-    "YELLOW_HUE_CENTER": 49.5,
-    "YELLOW_HUE_WIDTH": 12.0,
+    
     # Green
     "GREEN_HUE_MIN": 148,
     "GREEN_HUE_MAX": 178,
     "GREEN_S_MIN": 38,
-    # Yellow shortcut robustness + follow tuning
-    "YELLOW_SHORTCUT_MIN_SCORE": 0.32,
-    "YELLOW_SHORTCUT_CONFIRM": 3,
-    "YELLOW_SHORTCUT_COOLDOWN_MS": 1200,
-    "YELLOW_KP": 3.4,
-    "YELLOW_KI": 0.02,
-    "YELLOW_KD": 16.0,
-    "YELLOW_MAX_TURN_RATE": 300,
-    "YELLOW_BASE_SPEED": 150,
-    "YELLOW_MIN_SPEED": 90,
-    "YELLOW_ERR_SCALE": 55,
-    "YELLOW_DERIV_ALPHA": 0.25,
-    "YELLOW_EXIT_SCORE": 0.09,
-    "YELLOW_BLACK_CONFIRM": 2,
-    # Yellow shortcut swivel + commit
-    "YELLOW_SWIVEL_PRIME_DEG": 10,
-    "YELLOW_SWIVEL_STEP_DEG": 6,
-    "YELLOW_SWIVEL_MAX_DEG": 30,
-    "YELLOW_REACQUIRE_MIN_SCORE": 0.38,
-    "YELLOW_COMMIT_MM": 80,
+    
     # Gridlock navigation constants
     "GRIDLOCK_ALIGN_ATTEMPTS": 8,
     "GRIDLOCK_ALIGN_TURN_DEG": 10,
@@ -219,10 +188,7 @@ class Robot:
         self.prev_left_is_black = False
         self.prev_right_is_black = False
         self.black_slow_until_ms = 0
-        self.yellow_last_seen_side = 0   # -1=left, +1=right, 0=unknown
-        self.yellow_black_confirm = 0
-        self.y_l_score = 0.0
-        self.y_r_score = 0.0
+        
 
         self.shortcut_information = {
             "is following shortcut": False,
@@ -240,10 +206,7 @@ class Robot:
         self._green_right_count = 0
         self._spill_cooldown_until = 0
         self._spill_retry_backoff_ms = CONSTANTS.get("SPILL_RETRY_COOLDOWN_MS", 1200)
-        # Yellow shortcut detection counters and cooldown
-        self._yshortcut_left_count = 0
-        self._yshortcut_right_count = 0
-        self._yellow_shortcut_cooldown_until = 0
+        
 
     # ========== GRIDLOCK HELPERS ==========
     def gridlock_snap_heading(self, force=False):
@@ -516,8 +479,6 @@ class Robot:
                 sp.beep(350, 90); wait(40); sp.beep(350, 90)
             elif state == "gray":
                 sp.beep(900, 80); wait(40); sp.beep(1100, 80)
-            elif state == "yellow line":
-                sp.beep(1200, 60); wait(30); sp.beep(1200, 60); wait(30); sp.beep(1200, 60)
             elif state == "green left":
                 sp.beep(1000, 70)
             elif state == "green right":
@@ -599,13 +560,6 @@ class Robot:
         elif information["color"] == Color.WHITE:
             return Color.WHITE
         elif (
-            ALLOW_YELLOW
-            and CONSTANTS.get("YELLOW_HUE_MIN") is not None
-            and CONSTANTS.get("YELLOW_HUE_MAX") is not None
-            and CONSTANTS.get("YELLOW_HUE_MIN") < information["hsv"].h < CONSTANTS.get("YELLOW_HUE_MAX")
-        ):
-            return Color.YELLOW
-        elif (
             information["color"] == Color.GREEN
             and CONSTANTS.get("GREEN_HUE_MIN", 135) < information["hsv"].h < CONSTANTS.get("GREEN_HUE_MAX", 165)
             and information["hsv"].s > CONSTANTS.get("GREEN_S_MIN", 30)
@@ -622,29 +576,7 @@ class Robot:
         else:
             return Color.NONE
 
-    def yellow_score(self, information):
-        hsv = information.get("hsv")
-        if hsv is None:
-            return 0.0
-        try:
-            h = float(hsv.h)
-            s = float(hsv.s)
-            v = float(hsv.v)
-        except Exception:
-            return 0.0
-        h_center = float(CONSTANTS.get("YELLOW_HUE_CENTER", 55.0))
-        if "YELLOW_HUE_WIDTH" in CONSTANTS:
-            h_width = float(CONSTANTS.get("YELLOW_HUE_WIDTH", 22.0))
-        else:
-            y_min = float(CONSTANTS.get("YELLOW_HUE_MIN", 45.0))
-            y_max = float(CONSTANTS.get("YELLOW_HUE_MAX", 67.0))
-            h_width = max(1.0, (y_max - y_min) / 2.0)
-            if "YELLOW_HUE_CENTER" not in CONSTANTS:
-                h_center = (y_min + y_max) / 2.0
-        h_score = max(0.0, 1.0 - abs(h - h_center) / max(1.0, h_width))
-        s_score = max(0.0, min(1.0, s / 100.0))
-        v_score = max(0.0, min(1.0, (v - 25.0) / 75.0))
-        return h_score * (0.6 + 0.3 * s_score + 0.1 * v_score)
+    
 
     def get_colors(self):
         self.left_color_sensor_information = {
@@ -729,127 +661,9 @@ class Robot:
 
         self.drive_with_bias(speed, turn_rate)
 
-    def follow_yellow(self):
-        """Follow the yellow branch using PID until it ends, then snap back to black.
-        Runs only while robot_state == 'yellow line'. No advanced search."""
-        if self.robot_state != "yellow line":
-            return
+    
 
-        # Current yellow presence and scores
-        y_left = (self.left_color == Color.YELLOW)
-        y_right = (self.right_color == Color.YELLOW)
-        raw_y_l = self.yellow_score(self.left_color_sensor_information)
-        raw_y_r = self.yellow_score(self.right_color_sensor_information)
-
-        # If yellow ended and black is available, snap back toward branch side and resume line
-        if not (y_left or y_right):
-            on_black = (self.left_color == Color.BLACK) or (self.right_color == Color.BLACK)
-            if on_black:
-                self.drivebase.stop()
-                # Snap toward the original branch side to catch black
-                snap_deg = int(CONSTANTS.get("TURN_YELLOW_DEGREES", 20))
-                if getattr(self, "_yellow_branch_side", "right") == "left":
-                    self.sharp_turn_in_degrees(+snap_deg, wait=True)
-                else:
-                    self.sharp_turn_in_degrees(-snap_deg, wait=True)
-                # Align on black and resume normal line following
-                self.align_to_line_in_place(timeout_ms=1200, err_tol=3)
-                self.robot_state = "line"
-            else:
-                # No search; simply hand control back to normal logic
-                self.drivebase.stop()
-                self.robot_state = "line"
-            return
-
-        # Track last-seen side for gentle biasing when weak
-        if y_left and not y_right:
-            self.yellow_last_seen_side = -1
-        elif y_right and not y_left:
-            self.yellow_last_seen_side = +1
-
-        # PID error (right - left) so positive turns right; scaled
-        error = (raw_y_r - raw_y_l) * float(CONSTANTS.get("YELLOW_ERR_SCALE", 50))
-
-        # PID timing
-        now = self.clock.time()
-        if not hasattr(self, "y_pid_last_ms"):
-            self.y_pid_last_ms = 0
-            self.y_prev_error = 0.0
-            self.y_error_integral = 0.0
-            self.y_d_err_filtered = 0.0
-        dt = 0.01 if self.y_pid_last_ms == 0 else max(0.001, (now - self.y_pid_last_ms) / 1000.0)
-        self.y_pid_last_ms = now
-
-        # PID gains
-        kp = float(CONSTANTS.get("YELLOW_KP", CONSTANTS.get("LINE_KP", 3.2)))
-        ki = float(CONSTANTS.get("YELLOW_KI", CONSTANTS.get("LINE_KI", 0.02)))
-        kd = float(CONSTANTS.get("YELLOW_KD", CONSTANTS.get("LINE_KD", 18.0)))
-
-        # Integral with clamp
-        self.y_error_integral += error * dt
-        i_max = float(CONSTANTS.get("LINE_I_MAX", 80.0))
-        if self.y_error_integral > i_max:
-            self.y_error_integral = i_max
-        elif self.y_error_integral < -i_max:
-            self.y_error_integral = -i_max
-
-        # Filtered derivative
-        raw_d = (error - self.y_prev_error) / dt
-        self.y_prev_error = error
-        alpha = float(CONSTANTS.get("YELLOW_DERIV_ALPHA", 0.2))
-        self.y_d_err_filtered = alpha * raw_d + (1.0 - alpha) * self.y_d_err_filtered
-
-        # PID output and clamp
-        turn = kp * error + ki * self.y_error_integral + kd * self.y_d_err_filtered
-        max_turn = int(CONSTANTS.get("YELLOW_MAX_TURN_RATE", CONSTANTS.get("LINE_MAX_TURN_RATE", 320)))
-        if turn > max_turn:
-            turn = max_turn
-        elif turn < -max_turn:
-            turn = -max_turn
-
-        # Speed schedule: slow down on large error
-        base = int(CONSTANTS.get("YELLOW_BASE_SPEED", CONSTANTS.get("MOVE_SPEED", 170)))
-        min_s = int(CONSTANTS.get("YELLOW_MIN_SPEED", CONSTANTS.get("LINE_MIN_SPEED", 80)))
-        err_scale = min(1.0, abs(error) / float(max(1, CONSTANTS.get("CORNER_ERR_THRESHOLD", 13) * 4)))
-        speed = max(min_s, int(base * (1.0 - 0.5 * err_scale)))
-
-        # Gentle bias when signal is very weak but one side was last seen
-        if raw_y_l < 0.1 and raw_y_r < 0.1 and getattr(self, "yellow_last_seen_side", 0) != 0:
-            bias = self.yellow_last_seen_side * max(60, int(max_turn * 0.25))
-            if abs(turn) < abs(bias):
-                turn = bias
-
-        # Drive along yellow
-        self.drive_with_bias(speed, turn)
-
-    def execute_yellow_shortcut(self, direction):
-        """Turn toward the detected yellow side, confirm, then commit or abort."""
-        self.stop_motors()
-        self._yellow_branch_side = direction
-
-        # Strong in-place turn toward the yellow side
-        turn_deg = int(CONSTANTS.get("YELLOW_SHORTCUT_TURN_DEG", CONSTANTS.get("TURN_YELLOW_DEGREES", 45)))
-        angle = turn_deg if direction == "left" else -turn_deg
-        self.sharp_turn_in_degrees(angle, wait=True)
-
-        # Confirm yellow on the matching sensor
-        self.get_colors()
-        min_score = float(CONSTANTS.get("YELLOW_REACQUIRE_MIN_SCORE", CONSTANTS.get("YELLOW_SHORTCUT_MIN_SCORE", 0.32)))
-        if direction == "left":
-            ok = (self.left_color == Color.YELLOW) or (self.yellow_score(self.left_color_sensor_information) >= min_score)
-        else:
-            ok = (self.right_color == Color.YELLOW) or (self.yellow_score(self.right_color_sensor_information) >= min_score)
-        if not ok:
-            self.sharp_turn_in_degrees(-angle, wait=True)
-            self.robot_state = "line"
-            return
-
-        # Commit onto yellow and start cooldown
-        commit_mm = int(CONSTANTS.get("YELLOW_COMMIT_MM", 80))
-        commit_speed = int(CONSTANTS.get("YELLOW_MIN_SPEED", CONSTANTS.get("LINE_MIN_SPEED", 80)))
-        self.move_forward(commit_mm, speed=commit_speed)
-        self._yellow_shortcut_cooldown_until = self.clock.time() + int(CONSTANTS.get("YELLOW_SHORTCUT_COOLDOWN_MS", 1200))
-        self.robot_state = "yellow line"
+    
 
     def turn_and_detect_ultrasonic(self, degrees=360):
         lowest_ultrasonic = 9999
@@ -1439,52 +1253,7 @@ class Robot:
             self.robot_state = "obstacle"
             return
 
-        # --- Yellow branch detection (interruptive) ---
-        if ALLOW_YELLOW:
-            # Lazy-init persistent counters and cooldown/side
-            if not hasattr(self, "_y_confirm_l"):
-                self._y_confirm_l = 0
-                self._y_confirm_r = 0
-                self._yellow_shortcut_cooldown_until = 0
-                self._yellow_branch_side = None
-
-            now = self.clock.time()
-            cooldown_ok = now >= self._yellow_shortcut_cooldown_until
-
-            # Raw yellow presence and strength on each side
-            y_left = (self.left_color == Color.YELLOW)
-            y_right = (self.right_color == Color.YELLOW)
-            score_l = self.yellow_score(self.left_color_sensor_information)
-            score_r = self.yellow_score(self.right_color_sensor_information)
-
-            # Thresholds and confirmation
-            min_score = float(CONSTANTS.get("YELLOW_SHORTCUT_MIN_SCORE", 0.32))
-            need = int(CONSTANTS.get("YELLOW_SHORTCUT_CONFIRM", 3))
-
-            # Consecutive confirms per side (strong yellow only)
-            self._y_confirm_l = (self._y_confirm_l + 1) if (y_left and score_l >= min_score) else 0
-            self._y_confirm_r = (self._y_confirm_r + 1) if (y_right and score_r >= min_score) else 0
-
-            # Lock in and interrupt all other processing
-            if cooldown_ok and (self._y_confirm_l >= need or self._y_confirm_r >= need):
-                # If both sides look valid, choose the stronger yellow score side
-                if self._y_confirm_l >= need and self._y_confirm_r >= need:
-                    choose_left = (score_l >= score_r)
-                else:
-                    choose_left = self._y_confirm_l >= need
-
-                if choose_left:
-                    self._yellow_branch_side = "left"
-                    self.robot_state = "yellow-left"   # turn left toward yellow
-                else:
-                    self._yellow_branch_side = "right"
-                    self.robot_state = "yellow-right"  # turn right toward yellow
-
-                # Reset counters and set cooldown; exit update() immediately
-                self._y_confirm_l = 0
-                self._y_confirm_r = 0
-                self._yellow_shortcut_cooldown_until = now + int(CONSTANTS.get("YELLOW_SHORTCUT_COOLDOWN_MS", 1200))
-                return
+        
 
         if (
             not self.shortcut_information["is following shortcut"]
@@ -1527,12 +1296,6 @@ class Robot:
             self.green_spill_ending()
         elif self.robot_state == "obstacle":
             self.avoid_obstacle()
-        elif self.robot_state == "yellow-left":
-            self.execute_yellow_shortcut("left")
-        elif self.robot_state == "yellow-right":
-            self.execute_yellow_shortcut("right")
-        elif self.robot_state == "yellow line":
-            self.follow_yellow()
         elif self.robot_state == "line":
             self.follow_line()
         elif self.robot_state == "green left":
