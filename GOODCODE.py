@@ -87,6 +87,17 @@ class Robot:
         }
         self.default_shortcut_information = self.shortcut_information.copy()
 
+    def beep(self, times=1, frequency=1000, duration=100, gap=50):
+        """Play short beeps for audible feedback."""
+        try:
+            for i in range(int(times)):
+                self.hub.speaker.beep(int(frequency), int(duration))
+                if i < int(times) - 1:
+                    wait(int(gap))
+        except Exception:
+            # Fail safely if speaker not available
+            pass
+
     def settings_default(self):
         self.drivebase.settings(
             straight_speed=CONSTANTS["DEFAULT_SPEED"],
@@ -197,7 +208,9 @@ class Robot:
             degrees = -CONSTANTS["TURN_GREEN_DEGREES"]
         else:
             degrees = CONSTANTS["TURN_GREEN_DEGREES"]
-       
+        # Beep once when starting a green turn (left or right)
+        self.beep(1, frequency=1000, duration=100)
+
         self.drivebase.curve(CONSTANTS["CURVE_RADIUS_GREEN"], degrees, Stop.COAST, True)
 
         stop = False
@@ -255,6 +268,8 @@ class Robot:
         return lowest_ultrasonic, lowest_ultrasonic_angle
    
     def green_spill_ending(self):
+        # Beep four times when starting the green spill ending routine
+        self.beep(4, frequency=1000, duration=100)
         self.move_forward(20)
         if self.has_sensed_green: # Only run the green spill ending once
             return
@@ -320,6 +335,8 @@ class Robot:
         self.move_forward(30) # Hopefully sense the black line again
 
     def avoid_obstacle(self):
+        # Beep twice when handling obstacle avoidance
+        self.beep(2, frequency=1000, duration=100)
         self.stop_motors()
         self.rotate_arm(-90)
         self.sharp_turn_in_degrees(CONSTANTS["OBSTACLE_INITIAL_TURN_DEGREES"])
@@ -330,6 +347,8 @@ class Robot:
         while self.right_color == Color.WHITE: # Keep turning until right sensor sees something other than white
             self.get_colors()
         self.turn_in_degrees(CONSTANTS["OBSTACLE_FINAL_TURN_DEGREES"])
+        # Ensure arm goes back down after obstacle avoidance
+        self.rotate_arm(90, stop_method=Stop.COAST)
         self.robot_state = "straight" # Reset state after handling obstacle
         self.move_arm_back_after_obstacle_time = self.iteration_count + CONSTANTS["OBSTACLE_ARM_RETURN_DELAY"]
    
@@ -408,6 +427,8 @@ class Robot:
     def avoid_obstacle(self):
         # Modified: arc around obstacle, but proactively rejoin the line by
         # driving until black is detected, then turning RIGHT onto the line.
+        # Beep twice when handling obstacle avoidance
+        self.beep(2, frequency=1000, duration=100)
         self.stop_motors()
         self.rotate_arm(-90)
 
@@ -446,6 +467,8 @@ class Robot:
                 self.move_forward(entry_fwd)
             self.sharp_turn_in_degrees(abs(int(CONSTANTS.get("OBSTACLE_RIGHT_ALIGN_DEG", 90))), wait=True)
             # No sweeping/align; immediately resume line following in that direction
+            # Ensure arm goes back down before resuming line mode
+            self.rotate_arm(90, stop_method=Stop.COAST)
             self.robot_state = "line"
             self.move_arm_back_after_obstacle_time = self.clock.time() + CONSTANTS["OBSTACLE_ARM_RETURN_DELAY"]
             return
@@ -507,6 +530,8 @@ class Robot:
         elif ALLOW_YELLOW and (self.left_color == Color.YELLOW or self.right_color == Color.YELLOW):
             self.robot_state = "yellow line"
             if not self.shortcut_information["is following shortcut"]:
+                # Beep three times on detecting yellow line shortcut
+                self.beep(3, frequency=1000, duration=100)
                 if self.left_color == Color.YELLOW:
                     self.turn_in_degrees(-90)
 
