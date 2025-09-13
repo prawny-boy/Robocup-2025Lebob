@@ -2,6 +2,7 @@ from pybricks.pupdevices import Motor, ColorSensor, UltrasonicSensor
 from pybricks.hubs import PrimeHub
 from pybricks.robotics import DriveBase
 from pybricks.parameters import Port, Color, Axis, Direction, Button, Stop
+from pybricks.tools import StopWatch, wait
 
 ALLOW_YELLOW = True
 
@@ -16,20 +17,38 @@ CONSTANTS = {
     "DEFAULT_TURN_ACCELERATION": 800,
     "OBSTACLE_MOVE_SPEED": 300,
     "MOVE_SPEED": 80,
-    "ULTRASONIC_THRESHOLD": 50,
+    # Obstacle detection/avoidance (merged from old_code)
+    "ULTRASONIC_THRESHOLD": 100,
+    "OBSTACLE_DETECT_CONFIRM": 4,
     "BLACK_WHEEL_SPEED": 30,
     "TURN_GREEN_DEGREES": 50,
     "BACK_AFTER_GREEN_TURN_DISTANCE": 14,
     "TURN_YELLOW_DEGREES": 20,
     "CURVE_RADIUS_GREEN": 78,
-    "CURVE_RADIUS_OBSTACLE": 170,
+    "CURVE_RADIUS_OBSTACLE": 180,
     "OBSTACLE_TURN_DEGREES": 175,
     "OBSTACLE_INITIAL_TURN_DEGREES": 90,
-    "OBSTACLE_FINAL_TURN_DEGREES": 80,
+    "OBSTACLE_FINAL_TURN_DEGREES": 70,
     "OBSTACLE_ARM_RETURN_DELAY": 3000,
+    # Obstacle line-jump tuning
+    "OBSTACLE_LINE_CONFIRM": 2,
+    "OBSTACLE_FORWARD_STEP_MM": 10,
+    "OBSTACLE_FORWARD_MAX_MM": 180,
+    "OBSTACLE_RIGHT_ALIGN_DEG": 90,
+    "OBSTACLE_ENTRY_FORWARD_MM": 20,
     "CURVE_RADIUS_LINE_FOLLOW": 4,
     "MAX_TURN_RATE": 100,
     "BLACK_COUNTER_THRESHOLD": 1000,
+    # Line follow + reacquire tuning used by obstacle logic
+    "LINE_KP": 3.0,
+    "LINE_KD": 18.0,
+    "LINE_MIN_SPEED": 80,
+    "LINE_MAX_TURN_RATE": 320,
+    "CORNER_ERR_THRESHOLD": 13,
+    "LINE_BLACK_REF_THRESHOLD": 39,
+    "LINE_REACQUIRE_TURN_STEP_DEG": 10,
+    "LINE_REACQUIRE_TURN_MAX_DEG": 120,
+    "LINE_REACQUIRE_CONFIRM": 2,
     "TURNING_WITH_WEIGHT_CORRECITON_MULTIPLIER": 1,
     # Can edge-refinement sweep tuning
     "CAN_REFINE_SWEEP_HALF_DEG": 80,
@@ -52,6 +71,7 @@ ports = {
 class Robot:
     def __init__(self):
         self.hub = PrimeHub(Axis.Z, Axis.X)
+        self.clock = StopWatch()
         self.left_drive = Motor(ports["left_drive"], positive_direction=Direction.COUNTERCLOCKWISE)
         self.right_drive = Motor(ports["right_drive"])
 
@@ -74,7 +94,8 @@ class Robot:
         self.iteration_count = 0 # Initialize the iteration counter
         self.black_counter = 0
         self.on_inverted = False
-        self.move_arm_back_after_obstacle_time = False
+        self.move_arm_back_after_obstacle_time = None
+        self._obstacle_below_count = 0
         self.has_sensed_green = False
 
         self.shortcut_information = {
@@ -250,6 +271,18 @@ class Robot:
 
             print(new_ultrasonic, self.drivebase.angle())
         return lowest_ultrasonic, lowest_ultrasonic_angle
+
+    def read_ultra_mm_obstacle(self):
+        """Median-filtered ultrasonic for obstacle detection (no near/far rejection)."""
+        samples = []
+        for _ in range(3):
+            d = self.ultrasonic_sensor.distance()
+            if d is None:
+                d = 9999
+            samples.append(d)
+            wait(2)
+        samples.sort()
+        return samples[1]
     
     def green_spill_ending(self):
         self.move_forward(20)
@@ -384,31 +417,143 @@ class Robot:
 
         self.move_forward(30) # Hopefully sense the black line again
 
+    def reacquire_line_oscillate(self, step_deg=10, max_deg=120, confirm=2):
+        def confirm_line(n):
+            count = 0
+            for _ in range(max(1, n)):
+                self.get_colors()
+                if self.left_color == Color.BLACK or self.right_color == Color.BLACK:
+                    count += 1
+                else:
+                    count = 0
+                if count >= n:
+                    return True
+                wait(5)
+            return False
+
+        current_offset = 0
+        if confirm_line(confirm):
+            return True
+
+        amp = step_deg
+        while amp <= max_deg:
+            delta = -amp - current_offset
+            if delta != 0:
+                self.sharp_turn_in_degrees(delta)
+                current_offset += delta
+            if confirm_line(confirm):
+                return True
+
+            delta = amp - current_offset
+            if delta != 0:
+                self.sharp_turn_in_degrees(delta)
+                current_offset += delta
+            if confirm_line(confirm):
+                return True
+
+            amp += step_deg
+
+        return False
+
+    def align_to_line_in_place(self, timeout_ms=1500, err_tol=3):
+        start = self.clock.time()
+        prev_err = 0
+        kp = CONSTANTS.get("LINE_KP", 3.2)
+        kd = 0.0
+        max_turn = CONSTANTS.get("LINE_MAX_TURN_RATE", 320)
+        while self.clock.time() - start < timeout_ms:
+            self.get_colors()
+            left_ref = self.left_color_sensor_information["reflection"]
+            right_ref = self.right_color_sensor_information["reflection"]
+            error = right_ref - left_ref if self.on_inverted else left_ref - right_ref
+            d_err = error - prev_err
+            prev_err = error
+            if abs(error) <= err_tol:
+                break
+            turn_rate = kp * error + kd * d_err
+            if turn_rate > max_turn:
+                turn_rate = max_turn
+            elif turn_rate < -max_turn:
+                turn_rate = -max_turn
+            self.drivebase.drive(0, turn_rate)
+            wait(10)
+        self.drivebase.stop()
+
     def avoid_obstacle(self):
+        # Modified: arc around obstacle, but proactively rejoin the line by
+        # driving until black is detected, then turning RIGHT onto the line.
         self.stop_motors()
         self.rotate_arm(-90)
-        self.sharp_turn_in_degrees(CONSTANTS["OBSTACLE_INITIAL_TURN_DEGREES"])
-        self.drivebase.curve(CONSTANTS["CURVE_RADIUS_OBSTACLE"], -CONSTANTS["OBSTACLE_TURN_DEGREES"], Stop.BRAKE, True)
-        # self.start_motors(CONSTANTS["OBSTACLE_MOVE_SPEED"], CONSTANTS["OBSTACLE_MOVE_SPEED"])
 
-        # self.get_colors() # Re-read colors after turning
-        # while self.right_color == Color.WHITE: # Keep turning until right sensor sees something other than white
-        #     self.get_colors()
-        self.turn_in_degrees(CONSTANTS["OBSTACLE_FINAL_TURN_DEGREES"])
-        self.robot_state = "straight" # Reset state after handling obstacle
-        self.move_arm_back_after_obstacle_time = self.iteration_count + CONSTANTS["OBSTACLE_ARM_RETURN_DELAY"]
+        # Initial sidestep turn
+        self.sharp_turn_in_degrees(CONSTANTS["OBSTACLE_INITIAL_TURN_DEGREES"])
+
+        # Start arc without blocking so we can watch sensors
+        self.drivebase.curve(
+            CONSTANTS["CURVE_RADIUS_OBSTACLE"],
+            -CONSTANTS["OBSTACLE_TURN_DEGREES"],
+            Stop.COAST,
+            False,
+        )
+
+        # Monitor for encountering the line (black) before the arc completes
+        confirm_need = int(CONSTANTS.get("OBSTACLE_LINE_CONFIRM", 2))
+        confirm = 0
+        line_hit = False
+        while not self.drivebase.done():
+            self.get_colors()
+            if self.left_color == Color.BLACK or self.right_color == Color.BLACK:
+                confirm += 1
+                if confirm >= confirm_need:
+                    line_hit = True
+                    break
+            else:
+                confirm = 0
+            wait(10)
+
+        self.drivebase.stop()
+
+        if line_hit:
+            # On first sight of black: drive a little forward, then turn RIGHT and resume line following
+            entry_fwd = int(CONSTANTS.get("OBSTACLE_ENTRY_FORWARD_MM", 20))
+            if entry_fwd > 0:
+                self.move_forward(entry_fwd)
+            self.sharp_turn_in_degrees(abs(int(CONSTANTS.get("OBSTACLE_RIGHT_ALIGN_DEG", 90))), wait=True)
+            # No sweeping/align; immediately resume line following in that direction
+            self.robot_state = "line"
+            self.move_arm_back_after_obstacle_time = self.clock.time() + CONSTANTS["OBSTACLE_ARM_RETURN_DELAY"]
+            return
+
+        # Fallback: if we never detected black during the arc, use oscillating reacquire
+        found = self.reacquire_line_oscillate(
+            step_deg=CONSTANTS.get("LINE_REACQUIRE_TURN_STEP_DEG", 10),
+            max_deg=CONSTANTS.get("LINE_REACQUIRE_TURN_MAX_DEG", 120),
+            confirm=CONSTANTS.get("LINE_REACQUIRE_CONFIRM", 2),
+        )
+        if not found:
+            self.turn_in_degrees(CONSTANTS["OBSTACLE_FINAL_TURN_DEGREES"])
+            found = self.reacquire_line_oscillate(
+                step_deg=CONSTANTS.get("LINE_REACQUIRE_TURN_STEP_DEG", 10),
+                max_deg=CONSTANTS.get("LINE_REACQUIRE_TURN_MAX_DEG", 120),
+                confirm=CONSTANTS.get("LINE_REACQUIRE_CONFIRM", 2),
+            )
+        if found:
+            self.align_to_line_in_place(timeout_ms=1500, err_tol=3)
+
+        self.robot_state = "line"
+        self.move_arm_back_after_obstacle_time = self.clock.time() + CONSTANTS["OBSTACLE_ARM_RETURN_DELAY"]
     
     def update(self):
         """Update the state of the robot."""
         self.get_colors()
-        self.ultrasonic = self.ultrasonic_sensor.distance()
+        self.ultrasonic = self.read_ultra_mm_obstacle()
 
         self.previous_state = self.robot_state
 
-        if self.move_arm_back_after_obstacle_time != False:
-            if self.iteration_count > self.move_arm_back_after_obstacle_time:
-                self.move_arm_back_after_obstacle_time = False
-                self.rotate_arm(90, stop_method=Stop.COAST)
+        # Arm return timer after obstacle handling
+        if self.move_arm_back_after_obstacle_time is not None and self.clock.time() >= self.move_arm_back_after_obstacle_time:
+            self.move_arm_back_after_obstacle_time = None
+            self.rotate_arm(90, stop_method=Stop.COAST)
 
         if (self.left_color == Color.GRAY and self.right_color == Color.GRAY) or (self.left_color == Color.GREEN and self.right_color == Color.GREEN):
             self.robot_state = "gray"
@@ -425,10 +570,15 @@ class Robot:
         if self.left_color == Color.WHITE and self.right_color == Color.WHITE:
             self.on_inverted = False
         
-        # Check for obstacle
-        if self.ultrasonic < CONSTANTS["ULTRASONIC_THRESHOLD"]:
+        # Check for obstacle using median-filtered reads and confirmation
+        if self.ultrasonic is not None and self.ultrasonic < CONSTANTS["ULTRASONIC_THRESHOLD"]:
+            self._obstacle_below_count += 1
+        else:
+            self._obstacle_below_count = 0
+        if self._obstacle_below_count >= CONSTANTS.get("OBSTACLE_DETECT_CONFIRM", 2):
+            self._obstacle_below_count = 0
             self.robot_state = "obstacle"
-            return # Exit update early if obstacle detected
+            return
 
         # Shortcut / Yellow
         elif ALLOW_YELLOW and (self.left_color == Color.YELLOW or self.right_color == Color.YELLOW):
