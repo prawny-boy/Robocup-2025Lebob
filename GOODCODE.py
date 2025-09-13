@@ -32,6 +32,7 @@ CONSTANTS = {
     "BLACK_COUNTER_THRESHOLD": 1000,
     "TURNING_WITH_WEIGHT_CORRECITON_MULTIPLIER": 1,
     "PROPORTIONAL_GAIN": 4.5,
+    "SPILL_FIND_CAN_METHOD": "" # sweep, spin or first
 }
 
 ports = {
@@ -245,6 +246,20 @@ class Robot:
             print(new_ultrasonic, self.drivebase.angle())
         return lowest_ultrasonic, lowest_ultrasonic_angle
     
+    def turn_and_detect_first_point(self, threshold=400):
+        self.drivebase.reset()
+        self.sharp_turn_in_degrees(360, wait=False)
+
+        while not self.drivebase.done():
+            new_ultrasonic = self.ultrasonic_sensor.distance()
+
+            if new_ultrasonic < threshold:
+                lowest_ultrasonic_angle = self.drivebase.angle()
+                self.stop_motors()
+
+            print(new_ultrasonic, self.drivebase.angle())
+        return new_ultrasonic, lowest_ultrasonic_angle
+    
     def green_spill_ending(self):
         self.move_forward(20)
         if self.has_sensed_green: # Only run the green spill ending once
@@ -272,16 +287,24 @@ class Robot:
 
         self.stop_motors() # Stop
 
-        lowest_ultrasonic = 2000
-        while lowest_ultrasonic == 2000:
-            lowest_ultrasonic, lowest_ultrasonic_angle = self.turn_and_detect_ultrasonic() # Turn 360 degrees, find the lowest ultrasonic and angle
+        if CONSTANTS["SPILL_FIND_CAN_METHOD"] == "first":
+            lowest_ultrasonic = 2000
+            while lowest_ultrasonic == 2000:
+                lowest_ultrasonic, lowest_ultrasonic_angle = self.turn_and_detect_first_point()
+            self.sharp_turn_in_degrees(5) # To middle of can
+        
+        elif CONSTANTS["SPILL_FIND_CAN_METHOD"] == "spin":
+            lowest_ultrasonic = 2000
+            while lowest_ultrasonic == 2000:
+                lowest_ultrasonic, lowest_ultrasonic_angle = self.turn_and_detect_ultrasonic() # Turn 360 degrees, find the lowest ultrasonic and angle
 
-        # if lowest_ultrasonic_angle > 180:
-        #     lowest_ultrasonic_angle -= 360
+            # if lowest_ultrasonic_angle > 180:
+            #     lowest_ultrasonic_angle -= 360
 
-        # self.drivebase.reset()
+            # self.drivebase.reset()
 
-        self.sharp_turn_in_degrees(lowest_ultrasonic_angle) # Turn to the lowest ultrasonic
+            self.sharp_turn_in_degrees(lowest_ultrasonic_angle) # Turn to the lowest ultrasonic
+        
         self.move_forward(min(lowest_ultrasonic - 20, 260)) # Go to the lowest ultrasonic
         self.rotate_arm(-95, stop_method=Stop.COAST, wait=True) # Arm down, capture the can
 
