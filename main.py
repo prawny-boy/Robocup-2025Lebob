@@ -10,12 +10,12 @@ CONSTANTS = {
     "DRIVEBASE_WHEEL_DIAMETER": 56,
     "DRIVEBASE_AXLE_TRACK": 112,
     "ARM_MOVE_SPEED": 500,
-    "DEFAULT_SPEED": 170,
+    "DEFAULT_SPEED": 120,
     "DEFAULT_ACCELERATION": 600,
-    "DEFAULT_TURN_RATE": 150,
-    "DEFAULT_TURN_ACCELERATION": 1600,
+    "DEFAULT_TURN_RATE": 100,
+    "DEFAULT_TURN_ACCELERATION": 1000,
     "OBSTACLE_MOVE_SPEED": 300,
-    "MOVE_SPEED": 170,
+    "MOVE_SPEED": 120,
     "ULTRASONIC_THRESHOLD": 50,
     "BLACK_WHEEL_SPEED": 30,
     "TURN_GREEN_DEGREES": 50,
@@ -28,9 +28,9 @@ CONSTANTS = {
     "OBSTACLE_FINAL_TURN_DEGREES": 70,
     "OBSTACLE_ARM_RETURN_DELAY": 3000,
     "CURVE_RADIUS_LINE_FOLLOW": 4,
-    "MAX_TURN_RATE": 150,
+    "MAX_TURN_RATE": 100,
     "BLACK_COUNTER_THRESHOLD": 1000,
-    "TURNING_WITH_WEIGHT_CORRECITON_MULTIPLIER": 1.03
+    "TURNING_WITH_WEIGHT_CORRECITON_MULTIPLIER": 1,
 }
 
 ports = {
@@ -442,7 +442,7 @@ class Robot:
             self.iteration_count += 1 # Increment the counter at the start of each loop
             self.update()
             self.move()
-            self.debug()
+            # self.debug()
 
 def main():
     robot = Robot()
