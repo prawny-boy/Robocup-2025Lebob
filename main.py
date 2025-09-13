@@ -972,24 +972,17 @@ class Robot:
         return pushed
 
     def push_can_to_back_of_spill_until_boundary(self, step_mm=20, bound_confirm=3, max_push_mm=700):
+        """Push the can straight until both sensors read WHITE, then stop.
+        Advances in small recorded steps for accurate backtrack."""
         if self.spill_entry_heading is not None:
             self.face_heading(self.spill_entry_heading)
 
-        push_speed = 80  # mm/s steady push
-        self.drivebase.reset()
-        self.drive_with_bias(push_speed, 0)
-
+        pushed = 0
         hit_confirm = 0
-        while True:
-            pushed = abs(self.drivebase.distance())
-            if pushed >= max_push_mm:
-                break
-
+        while pushed < max_push_mm:
             self.get_colors()
-            boundary = (
-                (self.left_color == Color.RED and self.right_color == Color.RED)
-                or (self.left_color == Color.WHITE and self.right_color == Color.WHITE)
-            )
+            # Release condition: both sensors see white (spill boundary)
+            boundary = (self.left_color == Color.WHITE and self.right_color == Color.WHITE)
             if boundary:
                 hit_confirm += 1
                 if hit_confirm >= bound_confirm:
@@ -997,13 +990,9 @@ class Robot:
             else:
                 hit_confirm = 0
 
-            wait(5)
-
-        self.drivebase.stop()
-        pushed = abs(self.drivebase.distance())
-        if self.can_recording and pushed > 0:
-            self.can_path.append(("move", pushed))
-
+            # Advance in small straight steps and record them for precise backtrack
+            self.can_move_forward(step_mm)
+            pushed += step_mm
         return pushed
 
     def green_spill_ending(self):
