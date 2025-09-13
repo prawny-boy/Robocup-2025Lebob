@@ -19,19 +19,19 @@ CONSTANTS = {
     "ULTRASONIC_THRESHOLD": 50,
     "BLACK_WHEEL_SPEED": 30,
     "TURN_GREEN_DEGREES": 50,
-    "BACK_AFTER_GREEN_TURN_DISTANCE": 6,
+    "BACK_AFTER_GREEN_TURN_DISTANCE": 14,
     "TURN_YELLOW_DEGREES": 20,
     "CURVE_RADIUS_GREEN": 78,
-    "CURVE_RADIUS_OBSTACLE": 130,
+    "CURVE_RADIUS_OBSTACLE": 170,
     "OBSTACLE_TURN_DEGREES": 175,
     "OBSTACLE_INITIAL_TURN_DEGREES": 90,
-    "OBSTACLE_FINAL_TURN_DEGREES": 70,
+    "OBSTACLE_FINAL_TURN_DEGREES": 80,
     "OBSTACLE_ARM_RETURN_DELAY": 3000,
     "CURVE_RADIUS_LINE_FOLLOW": 4,
     "MAX_TURN_RATE": 100,
     "BLACK_COUNTER_THRESHOLD": 1000,
     "TURNING_WITH_WEIGHT_CORRECITON_MULTIPLIER": 1,
-    "PROPORTIONAL_GAIN": 5,
+    "PROPORTIONAL_GAIN": 4.5,
 }
 
 ports = {
@@ -206,7 +206,7 @@ class Robot:
 
     def follow_line(self):
         if not self.on_inverted:
-            reflection_difference = self.left_color_sensor_information["reflection"] - self.right_color_sensor_information["reflection"]
+            reflection_difference = (self.left_color_sensor_information["reflection"] + 8) - self.right_color_sensor_information["reflection"]
         else:
             reflection_difference = self.right_color_sensor_information["reflection"] - self.left_color_sensor_information["reflection"]
         
@@ -315,11 +315,11 @@ class Robot:
         self.rotate_arm(-90)
         self.sharp_turn_in_degrees(CONSTANTS["OBSTACLE_INITIAL_TURN_DEGREES"])
         self.drivebase.curve(CONSTANTS["CURVE_RADIUS_OBSTACLE"], -CONSTANTS["OBSTACLE_TURN_DEGREES"], Stop.BRAKE, True)
-        self.start_motors(CONSTANTS["OBSTACLE_MOVE_SPEED"], CONSTANTS["OBSTACLE_MOVE_SPEED"])
+        # self.start_motors(CONSTANTS["OBSTACLE_MOVE_SPEED"], CONSTANTS["OBSTACLE_MOVE_SPEED"])
 
-        self.get_colors() # Re-read colors after turning
-        while self.right_color == Color.WHITE: # Keep turning until right sensor sees something other than white
-            self.get_colors()
+        # self.get_colors() # Re-read colors after turning
+        # while self.right_color == Color.WHITE: # Keep turning until right sensor sees something other than white
+        #     self.get_colors()
         self.turn_in_degrees(CONSTANTS["OBSTACLE_FINAL_TURN_DEGREES"])
         self.robot_state = "straight" # Reset state after handling obstacle
         self.move_arm_back_after_obstacle_time = self.iteration_count + CONSTANTS["OBSTACLE_ARM_RETURN_DELAY"]
