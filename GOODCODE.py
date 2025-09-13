@@ -245,6 +245,7 @@ class Robot:
         return lowest_ultrasonic, lowest_ultrasonic_angle
     
     def green_spill_ending(self):
+        self.move_forward(20)
         if self.has_sensed_green: # Only run the green spill ending once
             return
 
@@ -306,7 +307,7 @@ class Robot:
 
         self.settings_default() # Reset speed and settings
 
-        self.move_forward(10) # Hopefully sense the black line again
+        self.move_forward(30) # Hopefully sense the black line again
 
     def avoid_obstacle(self):
         self.stop_motors()
