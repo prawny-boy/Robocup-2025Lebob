@@ -31,8 +31,13 @@ CONSTANTS = {
     "MAX_TURN_RATE": 100,
     "BLACK_COUNTER_THRESHOLD": 1000,
     "TURNING_WITH_WEIGHT_CORRECITON_MULTIPLIER": 1,
-    "PROPORTIONAL_GAIN": 4.5,
-    "SPILL_FIND_CAN_METHOD": "" # sweep, spin or first
+    # Can edge-refinement sweep tuning
+    "CAN_REFINE_SWEEP_HALF_DEG": 80,
+    "CAN_EDGE_MARGIN_MM": 120,
+    "CAN_EDGE_CONFIRM": 3,
+    "CAN_SWEEP_TURN_RATE": 100,
+    "CAN_SWEEP_TURN_ACCEL": 300,
+    "PROPORTIONAL_GAIN": 5,
 }
 
 ports = {
@@ -246,20 +251,6 @@ class Robot:
             print(new_ultrasonic, self.drivebase.angle())
         return lowest_ultrasonic, lowest_ultrasonic_angle
     
-    def turn_and_detect_first_point(self, threshold=400):
-        self.drivebase.reset()
-        self.sharp_turn_in_degrees(360, wait=False)
-
-        while not self.drivebase.done():
-            new_ultrasonic = self.ultrasonic_sensor.distance()
-
-            if new_ultrasonic < threshold:
-                lowest_ultrasonic_angle = self.drivebase.angle()
-                self.stop_motors()
-
-            print(new_ultrasonic, self.drivebase.angle())
-        return new_ultrasonic, lowest_ultrasonic_angle
-    
     def green_spill_ending(self):
         self.move_forward(20)
         if self.has_sensed_green: # Only run the green spill ending once
@@ -287,25 +278,85 @@ class Robot:
 
         self.stop_motors() # Stop
 
-        if CONSTANTS["SPILL_FIND_CAN_METHOD"] == "first":
-            lowest_ultrasonic = 2000
-            while lowest_ultrasonic == 2000:
-                lowest_ultrasonic, lowest_ultrasonic_angle = self.turn_and_detect_first_point()
-            self.sharp_turn_in_degrees(5) # To middle of can
-        
-        elif CONSTANTS["SPILL_FIND_CAN_METHOD"] == "spin":
-            lowest_ultrasonic = 2000
-            while lowest_ultrasonic == 2000:
-                lowest_ultrasonic, lowest_ultrasonic_angle = self.turn_and_detect_ultrasonic() # Turn 360 degrees, find the lowest ultrasonic and angle
+        lowest_ultrasonic = 2000
+        while lowest_ultrasonic == 2000:
+            lowest_ultrasonic, lowest_ultrasonic_angle = self.turn_and_detect_ultrasonic() # Turn 360 degrees, find the lowest ultrasonic and angle
 
-            # if lowest_ultrasonic_angle > 180:
-            #     lowest_ultrasonic_angle -= 360
+        # if lowest_ultrasonic_angle > 180:
+        #     lowest_ultrasonic_angle -= 360
 
-            # self.drivebase.reset()
+        # self.drivebase.reset()
 
-            self.sharp_turn_in_degrees(lowest_ultrasonic_angle) # Turn to the lowest ultrasonic
-        
-        self.move_forward(min(lowest_ultrasonic - 20, 260)) # Go to the lowest ultrasonic
+        # Refine target by sweeping to find left/right edges and aim at midpoint
+        sweep_half = int(CONSTANTS.get("CAN_REFINE_SWEEP_HALF_DEG", 80))
+        edge_margin = int(CONSTANTS.get("CAN_EDGE_MARGIN_MM", 120))
+        edge_threshold = lowest_ultrasonic + edge_margin
+        # Save/adjust turn settings for smoother sweep
+        try:
+            ss, sa, prev_tr, prev_ta = self.drivebase.settings()
+        except Exception:
+            prev_tr = None
+            prev_ta = None
+        try:
+            self.drivebase.settings(
+                turn_rate=int(CONSTANTS.get("CAN_SWEEP_TURN_RATE", 100)),
+                turn_acceleration=int(CONSTANTS.get("CAN_SWEEP_TURN_ACCEL", 300)),
+            )
+        except Exception:
+            pass
+
+        # Move to left of the detected sector and sweep right across
+        self.sharp_turn_in_degrees(lowest_ultrasonic_angle - sweep_half, wait=True)
+        self.drivebase.reset()
+        self.sharp_turn_in_degrees(2 * sweep_half, wait=False)
+
+        saw_inside = False
+        first_enter = None
+        last_seen = None
+        lost = 0
+        confirm = int(CONSTANTS.get("CAN_EDGE_CONFIRM", 3))
+        while not self.drivebase.done():
+            d = self.ultrasonic_sensor.distance()
+            if d is None:
+                d = 9999
+            a = self.drivebase.angle()
+            if d <= edge_threshold:
+                if not saw_inside:
+                    saw_inside = True
+                    first_enter = a
+                last_seen = a
+                lost = 0
+            else:
+                if saw_inside:
+                    lost += 1
+                    if lost >= confirm and last_seen is not None:
+                        break
+        self.drivebase.stop()
+
+        # Restore previous turn settings
+        try:
+            if prev_tr is not None and prev_ta is not None:
+                self.drivebase.settings(turn_rate=prev_tr, turn_acceleration=prev_ta)
+            elif prev_tr is not None:
+                self.drivebase.settings(turn_rate=prev_tr)
+        except Exception:
+            pass
+
+        if first_enter is not None and last_seen is not None:
+            target_angle_rel = (first_enter + last_seen) / 2.0
+            # Rotate from current sweep end to the midpoint
+            delta = target_angle_rel - self.drivebase.angle()
+            self.sharp_turn_in_degrees(delta)
+        else:
+            # Fall back to the raw first-hit angle
+            self.sharp_turn_in_degrees(lowest_ultrasonic_angle)
+
+        # Approach using fresh distance at the refined heading
+        fresh_d = self.ultrasonic_sensor.distance()
+        if fresh_d is None:
+            fresh_d = lowest_ultrasonic
+        approach = max(0, min(260, int(fresh_d) - 20))
+        self.move_forward(approach)
         self.rotate_arm(-95, stop_method=Stop.COAST, wait=True) # Arm down, capture the can
 
         self.sharp_turn_in_degrees(180)
