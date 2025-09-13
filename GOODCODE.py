@@ -178,14 +178,9 @@ class Robot:
         self.move_forward(10) # Slow down a lot
    
     def turn_green(self, direction):
-        """Intersection-first green turn for reliability.
-        Sequence:
-        - Drive to intersection center (both sensors black) and align.
-        - Sharp 90 deg turn toward requested side.
-        - Move forward onto new line and align.
-        - Sweep only if still lost. Dual-green spill unchanged."""
-
-        # New: center on intersection before turning
+        """When there is a green on the left or the right, react to it by doing a larger turn left or right."""
+       
+        # Check if it actually green and not an error
         self.move_forward(10)
         self.get_colors()
         new_left_color = self.information_to_color(self.left_color_sensor_information)
@@ -193,158 +188,29 @@ class Robot:
 
         if not ((direction == "left" and new_left_color == Color.GREEN) or (direction == "right" and new_right_color == Color.GREEN)):
             return
-        if new_left_color == Color.GREEN and new_right_color == Color.GREEN:
+        elif (new_left_color == new_right_color == Color.GREEN):
             self.drivebase.stop()
             self.green_spill_ending()
             return
 
-        # 1) Drive forward until both sensors confirm black (center intersection)
-        confirm_need = int(CONSTANTS.get("GRID_BLACK_CONFIRM", 3))
-        confirm = 0
-        start_time = self.clock.time()
-        max_ms = 2500
-        while self.clock.time() - start_time < max_ms and confirm < confirm_need:
+        if direction == "left":
+            degrees = -CONSTANTS["TURN_GREEN_DEGREES"]
+        else:
+            degrees = CONSTANTS["TURN_GREEN_DEGREES"]
+       
+        self.drivebase.curve(CONSTANTS["CURVE_RADIUS_GREEN"], degrees, Stop.COAST, True)
+
+        stop = False
+        while not self.drivebase.done():
             self.get_colors()
-            if not self.on_inverted:
-                reflection_difference = (self.left_color_sensor_information["reflection"] + 2) - self.right_color_sensor_information["reflection"]
-            else:
-                reflection_difference = self.right_color_sensor_information["reflection"] - self.left_color_sensor_information["reflection"]
-            turn_rate = max(min(CONSTANTS["PROPORTIONAL_GAIN"] * reflection_difference, CONSTANTS["MAX_TURN_RATE"]), -CONSTANTS["MAX_TURN_RATE"])
-            self.drivebase.drive(CONSTANTS["MOVE_SPEED"], turn_rate)
-
-            if self.left_color == Color.BLACK and self.right_color == Color.BLACK:
-                confirm += 1
-            else:
-                confirm = 0
-            wait(5)
-        self.drivebase.stop()
-
-        # Align precisely (repeat for better precision)
-        try:
-            self.align_to_line_in_place(timeout_ms=1200, err_tol=3)
-            self.align_to_line_in_place(timeout_ms=600, err_tol=2)
-        except Exception:
-            pass
-
-        # 2) Sharp 90 deg turn in place toward requested direction
-        turn_deg = -90 if direction == "left" else 90
-        self.sharp_turn_in_degrees(turn_deg, wait=True)
-
-        # 3) Move forward onto the new line and align
-        entry_mm = 80  # ~50–100 mm
-        self.move_forward(entry_mm)
-        self.get_colors()
-        if self.left_color == Color.BLACK or self.right_color == Color.BLACK:
-            try:
-                self.align_to_line_in_place(timeout_ms=1200, err_tol=3)
-            except Exception:
-                pass
-            return
-
-        # 4) Last resort: brief sweep, then fallback backup
-        sweep_step = 8
-        max_sweep = 60
-        current_offset = 0
-        amp = sweep_step
-        while amp <= max_sweep:
-            # sweep left
-            delta = -amp - current_offset
-            if delta != 0:
-                self.sharp_turn_in_degrees(delta, wait=True)
-                current_offset += delta
-            self.get_colors()
-            if self.left_color == Color.BLACK or self.right_color == Color.BLACK:
-                try:
-                    self.align_to_line_in_place(timeout_ms=1200, err_tol=3)
-                except Exception:
-                    pass
-                return
-
-            # sweep right
-            delta = amp - current_offset
-            if delta != 0:
-                self.sharp_turn_in_degrees(delta, wait=True)
-                current_offset += delta
-            self.get_colors()
-            if self.left_color == Color.BLACK or self.right_color == Color.BLACK:
-                try:
-                    self.align_to_line_in_place(timeout_ms=1200, err_tol=3)
-                except Exception:
-                    pass
-                return
-
-            amp += sweep_step
-
-        self.move_forward(-CONSTANTS["BACK_AFTER_GREEN_TURN_DISTANCE"])
-        return
-
-        # Confirm green on the requested side
-        self.move_forward(10)
-        self.get_colors()
-        new_left_color = self.information_to_color(self.left_color_sensor_information)
-        new_right_color = self.information_to_color(self.right_color_sensor_information)
-
-        if not ((direction == "left" and new_left_color == Color.GREEN) or (direction == "right" and new_right_color == Color.GREEN)):
-            return
-        # Dual-green spill unchanged
-        if new_left_color == Color.GREEN and new_right_color == Color.GREEN:
-            self.drivebase.stop()
-            self.green_spill_ending()
-            return
-
-        # Sharp 90° point turn toward the green (no arc)
-        turn_deg = -90 if direction == "left" else 90
-        self.sharp_turn_in_degrees(turn_deg, wait=True)
-
-        # Drive forward onto the perpendicular line
-        entry_mm = 80  # ~50–100 mm
-        self.move_forward(entry_mm)
-
-        # If line is detected, align immediately
-        self.get_colors()
-        if self.left_color == Color.BLACK or self.right_color == Color.BLACK:
-            try:
-                self.align_to_line_in_place(timeout_ms=1200, err_tol=3)
-            except Exception:
-                pass
-            return
-
-        # Last resort: brief sweep to reacquire the line
-        sweep_step = 8
-        max_sweep = 60
-        current_offset = 0
-        amp = sweep_step
-        while amp <= max_sweep:
-            # sweep left
-            delta = -amp - current_offset
-            if delta != 0:
-                self.sharp_turn_in_degrees(delta, wait=True)
-                current_offset += delta
-            self.get_colors()
-            if self.left_color == Color.BLACK or self.right_color == Color.BLACK:
-                try:
-                    self.align_to_line_in_place(timeout_ms=1200, err_tol=3)
-                except Exception:
-                    pass
-                return
-
-            # sweep right
-            delta = amp - current_offset
-            if delta != 0:
-                self.sharp_turn_in_degrees(delta, wait=True)
-                current_offset += delta
-            self.get_colors()
-            if self.left_color == Color.BLACK or self.right_color == Color.BLACK:
-                try:
-                    self.align_to_line_in_place(timeout_ms=1200, err_tol=3)
-                except Exception:
-                    pass
-                return
-
-            amp += sweep_step
-
-        # If still not found, back up slightly
-        self.move_forward(-CONSTANTS["BACK_AFTER_GREEN_TURN_DISTANCE"])
+            if self.left_color == Color.GREEN and self.right_color == Color.GREEN:
+                self.drivebase.stop()
+                self.green_spill_ending()
+                stop = True
+                break
+       
+        if not stop:
+            self.move_forward(-CONSTANTS["BACK_AFTER_GREEN_TURN_DISTANCE"])
 
 
     def follow_line(self):
