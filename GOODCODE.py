@@ -19,13 +19,13 @@ CONSTANTS = {
     "ULTRASONIC_THRESHOLD": 50,
     "BLACK_WHEEL_SPEED": 30,
     "TURN_GREEN_DEGREES": 50,
-    "BACK_AFTER_GREEN_TURN_DISTANCE": 14,
+    "BACK_AFTER_GREEN_TURN_DISTANCE": 13,
     "TURN_YELLOW_DEGREES": 20,
     "CURVE_RADIUS_GREEN": 78,
-    "CURVE_RADIUS_OBSTACLE": 170,
+    "CURVE_RADIUS_OBSTACLE": 130,
     "OBSTACLE_TURN_DEGREES": 175,
     "OBSTACLE_INITIAL_TURN_DEGREES": 90,
-    "OBSTACLE_FINAL_TURN_DEGREES": 80,
+    "OBSTACLE_FINAL_TURN_DEGREES": 70,
     "OBSTACLE_ARM_RETURN_DELAY": 3000,
     "CURVE_RADIUS_LINE_FOLLOW": 4,
     "MAX_TURN_RATE": 100,
@@ -37,7 +37,7 @@ CONSTANTS = {
     "CAN_EDGE_CONFIRM": 3,
     "CAN_SWEEP_TURN_RATE": 100,
     "CAN_SWEEP_TURN_ACCEL": 300,
-    "PROPORTIONAL_GAIN": 5,
+    "PROPORTIONAL_GAIN": 4.7,
 }
 
 ports = {
@@ -92,12 +92,12 @@ class Robot:
             turn_rate=CONSTANTS["DEFAULT_TURN_RATE"],
             turn_acceleration=CONSTANTS["DEFAULT_TURN_ACCELERATION"]
         )
-    
+   
     def battery_display(self):
         battery_voltage = self.hub.battery.voltage()
 
         print("Battery:", battery_voltage)
-    
+   
     def turn_in_degrees(self, degrees, wait=False):
         """Turn in degrees. Using a curve for line following."""
         self.drivebase.curve(CONSTANTS["CURVE_RADIUS_LINE_FOLLOW"], degrees, Stop.COAST, wait)
@@ -137,7 +137,7 @@ class Robot:
     def information_to_color(self, information):
         """Convert color sensor information to a color."""
         if information["reflection"] > 99: # Probably needs to be better
-            return Color.GRAY
+            return Color.WHITE
         elif information["color"] == Color.WHITE:
             return Color.WHITE
         elif information["hsv"].h < 67 and information["hsv"].h > 45 and ALLOW_YELLOW:
@@ -174,10 +174,10 @@ class Robot:
 
     def both_black_slow(self):
         self.move_forward(10) # Slow down a lot
-    
+   
     def turn_green(self, direction):
         """When there is a green on the left or the right, react to it by doing a larger turn left or right."""
-        
+       
         # Check if it actually green and not an error
         self.move_forward(10)
         self.get_colors()
@@ -192,10 +192,10 @@ class Robot:
             return
 
         if direction == "left":
-            degrees = -CONSTANTS["TURN_GREEN_DEGREES"] 
+            degrees = -CONSTANTS["TURN_GREEN_DEGREES"]
         else:
             degrees = CONSTANTS["TURN_GREEN_DEGREES"]
-        
+       
         self.drivebase.curve(CONSTANTS["CURVE_RADIUS_GREEN"], degrees, Stop.COAST, True)
 
         stop = False
@@ -206,16 +206,17 @@ class Robot:
                 self.green_spill_ending()
                 stop = True
                 break
-        
+       
         if not stop:
             self.move_forward(-CONSTANTS["BACK_AFTER_GREEN_TURN_DISTANCE"])
 
+
     def follow_line(self):
         if not self.on_inverted:
-            reflection_difference = (self.left_color_sensor_information["reflection"] + 8) - self.right_color_sensor_information["reflection"]
+            reflection_difference = (self.left_color_sensor_information["reflection"] + 2) - self.right_color_sensor_information["reflection"]
         else:
             reflection_difference = self.right_color_sensor_information["reflection"] - self.left_color_sensor_information["reflection"]
-        
+       
         turn_rate = max(min(CONSTANTS["PROPORTIONAL_GAIN"] * reflection_difference, CONSTANTS["MAX_TURN_RATE"]), -CONSTANTS["MAX_TURN_RATE"])
         self.drivebase.drive(CONSTANTS["MOVE_SPEED"], turn_rate)
 
@@ -224,7 +225,7 @@ class Robot:
             if self.left_color == Color.BLACK and self.right_color == Color.BLACK:
                 self.both_black_slow()
                 self.black_counter += 1
-    
+   
     def follow_color(self, color_to_follow=Color.YELLOW):
         if self.left_color == color_to_follow:
             self.turn_in_degrees(-CONSTANTS["TURN_YELLOW_DEGREES"])
@@ -250,7 +251,7 @@ class Robot:
 
             print(new_ultrasonic, self.drivebase.angle())
         return lowest_ultrasonic, lowest_ultrasonic_angle
-    
+   
     def green_spill_ending(self):
         self.move_forward(20)
         if self.has_sensed_green: # Only run the green spill ending once
@@ -355,12 +356,12 @@ class Robot:
         fresh_d = self.ultrasonic_sensor.distance()
         if fresh_d is None:
             fresh_d = lowest_ultrasonic
-        approach = max(0, min(260, int(fresh_d) - 20))
+        approach = max(0, min(240, int(fresh_d) - 20))
         self.move_forward(approach)
         self.rotate_arm(-95, stop_method=Stop.COAST, wait=True) # Arm down, capture the can
 
         self.sharp_turn_in_degrees(180)
-        self.move_forward(min(lowest_ultrasonic - 20, 260))
+        self.move_forward(approach)
 
         # self.move_forward(max(-(lowest_ultrasonic - 20), -260)) # Go back to middle
 
@@ -384,20 +385,80 @@ class Robot:
 
         self.move_forward(30) # Hopefully sense the black line again
 
+    # def avoid_obstacle(self):
+    #     self.stop_motors()
+    #     self.rotate_arm(-90)
+    #     self.sharp_turn_in_degrees(CONSTANTS["OBSTACLE_INITIAL_TURN_DEGREES"])
+    #     self.drivebase.curve(CONSTANTS["CURVE_RADIUS_OBSTACLE"], -CONSTANTS["OBSTACLE_TURN_DEGREES"], Stop.BRAKE, True)
+    #     self.start_motors(CONSTANTS["OBSTACLE_MOVE_SPEED"], CONSTANTS["OBSTACLE_MOVE_SPEED"])
+
+    #     self.robot_state = "straight" # Reset state after handling obstacle
+    #     self.move_arm_back_after_obstacle_time = self.iteration_count + CONSTANTS["OBSTACLE_ARM_RETURN_DELAY"]
+   
     def avoid_obstacle(self):
+        # Modified: arc around obstacle, but proactively rejoin the line by
+        # driving until black is detected, then turning RIGHT onto the line.
         self.stop_motors()
         self.rotate_arm(-90)
-        self.sharp_turn_in_degrees(CONSTANTS["OBSTACLE_INITIAL_TURN_DEGREES"])
-        self.drivebase.curve(CONSTANTS["CURVE_RADIUS_OBSTACLE"], -CONSTANTS["OBSTACLE_TURN_DEGREES"], Stop.BRAKE, True)
-        # self.start_motors(CONSTANTS["OBSTACLE_MOVE_SPEED"], CONSTANTS["OBSTACLE_MOVE_SPEED"])
 
-        # self.get_colors() # Re-read colors after turning
-        # while self.right_color == Color.WHITE: # Keep turning until right sensor sees something other than white
-        #     self.get_colors()
-        self.turn_in_degrees(CONSTANTS["OBSTACLE_FINAL_TURN_DEGREES"])
-        self.robot_state = "straight" # Reset state after handling obstacle
-        self.move_arm_back_after_obstacle_time = self.iteration_count + CONSTANTS["OBSTACLE_ARM_RETURN_DELAY"]
-    
+        # Initial sidestep turn
+        self.sharp_turn_in_degrees(CONSTANTS["OBSTACLE_INITIAL_TURN_DEGREES"])
+
+        # Start arc without blocking so we can watch sensors
+        self.drivebase.curve(
+            CONSTANTS["CURVE_RADIUS_OBSTACLE"],
+            -CONSTANTS["OBSTACLE_TURN_DEGREES"],
+            Stop.COAST,
+            False,
+        )
+
+        # Monitor for encountering the line (black) before the arc completes
+        confirm_need = int(CONSTANTS.get("OBSTACLE_LINE_CONFIRM", 2))
+        confirm = 0
+        line_hit = False
+        while not self.drivebase.done():
+            self.get_colors()
+            if self.left_color == Color.BLACK or self.right_color == Color.BLACK:
+                confirm += 1
+                if confirm >= confirm_need:
+                    line_hit = True
+                    break
+            else:
+                confirm = 0
+            wait(10)
+
+        self.drivebase.stop()
+
+        if line_hit:
+            # On first sight of black: drive a little forward, then turn RIGHT and resume line following
+            entry_fwd = int(CONSTANTS.get("OBSTACLE_ENTRY_FORWARD_MM", 20))
+            if entry_fwd > 0:
+                self.move_forward(entry_fwd)
+            self.sharp_turn_in_degrees(abs(int(CONSTANTS.get("OBSTACLE_RIGHT_ALIGN_DEG", 90))), wait=True)
+            # No sweeping/align; immediately resume line following in that direction
+            self.robot_state = "line"
+            self.move_arm_back_after_obstacle_time = self.clock.time() + CONSTANTS["OBSTACLE_ARM_RETURN_DELAY"]
+            return
+
+        # Fallback: if we never detected black during the arc, use oscillating reacquire
+        found = self.reacquire_line_oscillate(
+            step_deg=CONSTANTS.get("LINE_REACQUIRE_TURN_STEP_DEG", 10),
+            max_deg=CONSTANTS.get("LINE_REACQUIRE_TURN_MAX_DEG", 120),
+            confirm=CONSTANTS.get("LINE_REACQUIRE_CONFIRM", 2),
+        )
+        if not found:
+            self.turn_in_degrees(CONSTANTS["OBSTACLE_FINAL_TURN_DEGREES"])
+            found = self.reacquire_line_oscillate(
+                step_deg=CONSTANTS.get("LINE_REACQUIRE_TURN_STEP_DEG", 10),
+                max_deg=CONSTANTS.get("LINE_REACQUIRE_TURN_MAX_DEG", 120),
+                confirm=CONSTANTS.get("LINE_REACQUIRE_CONFIRM", 2),
+            )
+        if found:
+            self.align_to_line_in_place(timeout_ms=1500, err_tol=3)
+
+        self.robot_state = "line"
+        self.move_arm_back_after_obstacle_time = self.clock.time() + CONSTANTS["OBSTACLE_ARM_RETURN_DELAY"]
+
     def update(self):
         """Update the state of the robot."""
         self.get_colors()
@@ -410,21 +471,21 @@ class Robot:
                 self.move_arm_back_after_obstacle_time = False
                 self.rotate_arm(90, stop_method=Stop.COAST)
 
-        if (self.left_color == Color.GRAY and self.right_color == Color.GRAY) or (self.left_color == Color.GREEN and self.right_color == Color.GREEN):
-            self.robot_state = "gray"
-            return
-        
+        # if (self.left_color == Color.GRAY and self.right_color == Color.GRAY) or (self.left_color == Color.GREEN and self.right_color == Color.GREEN):
+        #     self.robot_state = "gray"
+        #     return
+       
         if self.left_color == Color.BLACK and self.right_color == Color.BLACK:
             self.black_counter += 1
             self.both_black_slow()
         else:
             self.black_counter = 0
-        
+       
         if self.black_counter > CONSTANTS["BLACK_COUNTER_THRESHOLD"]:
             self.on_inverted = True
         if self.left_color == Color.WHITE and self.right_color == Color.WHITE:
             self.on_inverted = False
-        
+       
         # Check for obstacle
         if self.ultrasonic < CONSTANTS["ULTRASONIC_THRESHOLD"]:
             self.robot_state = "obstacle"
@@ -445,14 +506,13 @@ class Robot:
 
                     if self.shortcut_information["first turned"] == None:
                         self.shortcut_information["first turned"] = "right"
-            
+           
             self.shortcut_information["is following shortcut"] = True
-        
+       
         # Line
         elif not self.shortcut_information["is following shortcut"] and \
-            self.left_color in [Color.WHITE, Color.BLACK, Color.GRAY] and \
-            self.right_color in [Color.WHITE, Color.BLACK, Color.GRAY] and \
-            not (self.left_color == self.right_color and self.left_color == Color.GRAY): # Both not gray
+            self.left_color in [Color.WHITE, Color.BLACK] and \
+            self.right_color in [Color.WHITE, Color.BLACK]:
             self.robot_state = "line"
 
         # Turn / Green
@@ -484,17 +544,17 @@ class Robot:
     def move(self):
         """Move the robot based on its current state."""
         # Gray
-        if self.robot_state == "gray":
-            self.green_spill_ending()
-        
+        # if self.robot_state == "gray":
+        #     self.green_spill_ending()
+       
         # Obstacle
-        elif self.robot_state == "obstacle":
+        if self.robot_state == "obstacle":
             self.avoid_obstacle()
 
         # ShortcutYellow
         elif self.shortcut_information["is following shortcut"]:
             self.follow_color()
-        
+       
         # Line
         elif self.robot_state == "line":
             self.follow_line()
