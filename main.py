@@ -18,8 +18,8 @@ CONSTANTS = {
     "OBSTACLE_DETECT_CONFIRM": 4,       # consecutive reads to confirm obstacle
     "BLACK_WHEEL_SPEED": 30,
     # Optional: direct-drive trim to correct mechanical bias (1.00 = no change)
-    "LEFT_MOTOR_TRIM": 1,
-    "RIGHT_MOTOR_TRIM": 1,
+    "LEFT_MOTOR_TRIM": 1.00,
+    "RIGHT_MOTOR_TRIM": 1.00,
     "TURN_GREEN_DEGREES": 50,
     "BACK_AFTER_GREEN_TURN_DISTANCE": 40,
     "CURVE_RADIUS_GREEN": 78,
@@ -39,13 +39,13 @@ CONSTANTS = {
     "LINE_MAX_TURN_RATE": 320,
     "CORNER_ERR_THRESHOLD": 13,     # reflectance delta that indicates a sharp corner
     # Can scanning/approach tuning
-    "CAN_DEBUG_PRINT": False,
-    "CAN_SWEEP_TURN_RATE": 120,
+    "CAN_DEBUG_PRINT": True,
+    "CAN_SWEEP_TURN_RATE": 100,
     "CAN_SWEEP_TURN_RATE_SLOW": 60,
     "CAN_SCAN_MAX_MM": 350,
-    "CAN_FIRST_HIT_MAX_MM": 550,
+    "CAN_FIRST_HIT_MAX_MM": 350,
     "CAN_EDGE_MARGIN_MM": 120,
-    "CAN_IGNORE_ABOVE_MM": 1800,
+    "CAN_IGNORE_ABOVE_MM": 500,
     "CAN_MIN_VALID_MM": 60,
     "CAN_US_MEDIAN_SAMPLES": 5,
     # Micro-oscillation scan tuning
@@ -59,7 +59,7 @@ CONSTANTS = {
     "LINE_REACQUIRE_MAX_MM": 400,
     "LINE_REACQUIRE_BACK_MM": 50,
     # Robust line detection threshold (reflection) for reacquire
-    "LINE_BLACK_REF_THRESHOLD": 36,
+    "LINE_BLACK_REF_THRESHOLD": 39,
     "LINE_REACQUIRE_TURN_STEP_DEG": 10,
     "LINE_REACQUIRE_TURN_MAX_DEG": 120,
     "CAN_SEGMENT_MIN_POINTS": 4,
@@ -78,11 +78,10 @@ CONSTANTS = {
     "BATTERY_STATUS_INTERVAL_MS": 30000,
     # Behavior toggles
     "SOUNDS_ENABLED": True,
-    "TREAT_GRAY_AS_SPILL": False,
     "ENABLE_INVERTED_MODE": False,
     # Green spill detection stability
-    "GREEN_DETECT_CONFIRM": 3,
-    "SPILL_ENTRY_CONFIRM": 3,
+    "GREEN_DETECT_CONFIRM": 5,
+    "SPILL_ENTRY_CONFIRM": 5,
     "SPILL_RETRY_COOLDOWN_MS": 1200,
     # Obstacle reacquire guard
     "OBSTACLE_REACQUIRE_MAX_MM": 220,
@@ -92,14 +91,13 @@ CONSTANTS = {
     # Straight-drive trim for manual straight helper. Keep small.
     "STRAIGHT_TURN_TRIM": 0,
     # Base global bias added to every drive() turn rate. Negative steers right.
-    "BASE_TURN_BIAS": 32,
-    # Optional color calibration overrides
-    "GRAY_REFLECTION_MIN": 60,
+    "BASE_TURN_BIAS": -10,
+    # Optional color calibration overrides (gray removed)
     
     # Green
     "GREEN_HUE_MIN": 100,
-    "GREEN_HUE_MAX": 240,
-    "GREEN_S_MIN": 10,
+    "GREEN_HUE_MAX": 190,
+    "GREEN_S_MIN": 25,
     
     # Gridlock navigation constants
     "GRIDLOCK_ALIGN_ATTEMPTS": 8,
@@ -115,9 +113,6 @@ CONSTANTS = {
     "GRIDLOCK_CENTER_MAX_STEPS": 6,
     "GRIDLOCK_ALIGN_BLACK_CONFIRM": 3,
     "GRIDLOCK_INTERSECTION_CONFIRM": 3,
-    # Gridlock final wiggle
-    "GRIDLOCK_WIGGLE_DEG": 6,
-    "GRIDLOCK_WIGGLE_STEPS": 2,
 }
 # aahaan
 # vivek
@@ -262,21 +257,18 @@ class Robot:
             wait(10)
         return True
 
-    def gridlock_align_on_intersection(self, final=False):
-        """Align tightly on an intersection using pivots and nudges.
-        If final=True, finish with a short wiggle scan for green before continuing."""
+    def gridlock_align_on_intersection(self):
+        """Gently pivot and rock to align on an intersection until both sensors see black reliably."""
         self.drivebase.stop()
         wait(CONSTANTS.get("GRIDLOCK_STOP_MS", 200))
-
         pivot = int(CONSTANTS.get("GRIDLOCK_ALIGN_TURN_DEG", 8))
         rock_step = int(CONSTANTS.get("GRIDLOCK_ROCK_STEP_MM", 15))
         confirm = int(CONSTANTS.get("GRIDLOCK_ALIGN_BLACK_CONFIRM", 3))
         attempts = int(CONSTANTS.get("GRIDLOCK_ALIGN_ATTEMPTS", 6))
-
-        # Coarse alignment loop: pivot L-R-L, then rock F-B-F
         for _ in range(attempts):
             if self.gridlock_check_black_both(confirm):
                 break
+            # Small left-right-left pivot
             self.sharp_turn_in_degrees(-pivot, wait=True)
             if self.gridlock_check_black_both(confirm):
                 break
@@ -286,6 +278,7 @@ class Robot:
             self.sharp_turn_in_degrees(-pivot, wait=True)
             if self.gridlock_check_black_both(confirm):
                 break
+            # Gentle forward-back rock
             self.move_forward(rock_step)
             if self.gridlock_check_black_both(confirm):
                 break
@@ -293,20 +286,9 @@ class Robot:
             if self.gridlock_check_black_both(confirm):
                 break
             self.move_forward(rock_step)
-
-        # Fine centering: small nudges until stable
-        self.gridlock_nudge_center()
-
         self.drivebase.stop()
         wait(CONSTANTS.get("GRIDLOCK_STOP_MS", 200))
         self.gridlock_snap_heading_turn()
-
-        # Optional final wiggle to hunt for green without changing thresholds
-        if final:
-            try:
-                self.gridlock_scan_green_wiggle()
-            except Exception:
-                pass
 
     def gridlock_nudge_center(self):
         """Small forward/back nudges to center on the intersection."""
@@ -323,37 +305,6 @@ class Robot:
             if self.gridlock_check_black_both(confirm):
                 return True
             self.move_forward(step)
-        return False
-
-    def gridlock_scan_green_wiggle(self, wiggle_deg=None, steps=None):
-        """Short left/right wiggle to catch green at a final intersection.
-        Stops if both sensors read green; otherwise keeps orientation roughly centered."""
-        if wiggle_deg is None:
-            wiggle_deg = int(CONSTANTS.get("GRIDLOCK_WIGGLE_DEG", 6))
-        if steps is None:
-            steps = int(CONSTANTS.get("GRIDLOCK_WIGGLE_STEPS", 2))
-
-        def both_green():
-            self.get_colors()
-            return (self.left_color == Color.GREEN and self.right_color == Color.GREEN)
-
-        if both_green():
-            self.drivebase.stop()
-            return True
-
-        for _ in range(max(1, steps)):
-            self.sharp_turn_in_degrees(+wiggle_deg, wait=True)
-            if both_green():
-                self.drivebase.stop()
-                return True
-            self.sharp_turn_in_degrees(-2 * wiggle_deg, wait=True)
-            if both_green():
-                self.drivebase.stop()
-                return True
-            self.sharp_turn_in_degrees(+wiggle_deg, wait=True)
-            if both_green():
-                self.drivebase.stop()
-                return True
         return False
 
     def gridlock_turn_90(self, direction="right"):
@@ -524,8 +475,6 @@ class Robot:
                 sp.beep(700, 60)
             elif state == "obstacle":
                 sp.beep(350, 90); wait(40); sp.beep(350, 90)
-            elif state == "gray":
-                sp.beep(900, 80); wait(40); sp.beep(1100, 80)
             elif state == "green left":
                 sp.beep(1000, 70)
             elif state == "green right":
@@ -601,10 +550,8 @@ class Robot:
         self.drivebase.settings(straight_speed=speed)
 
     def information_to_color(self, information):
-        gray_ref_min = int(CONSTANTS.get("GRAY_REFLECTION_MIN", 99))
-        if information["reflection"] > gray_ref_min:
-            return Color.GRAY
-        elif information["color"] == Color.WHITE:
+        # Gray handling removed
+        if information["color"] == Color.WHITE:
             return Color.WHITE
         elif (
             information["color"] == Color.GREEN
@@ -650,8 +597,7 @@ class Robot:
 
         self.get_colors()
         if (
-            (self.left_color == Color.GREEN and self.right_color == Color.GREEN)
-            or (self.left_color == Color.GRAY and self.right_color == Color.GRAY)
+            self.left_color == Color.GREEN and self.right_color == Color.GREEN
         ):
             self.drivebase.stop()
             self.green_spill_ending()
@@ -666,8 +612,7 @@ class Robot:
         while not self.drivebase.done():
             self.get_colors()
             both_green = (self.left_color == Color.GREEN and self.right_color == Color.GREEN)
-            both_gray = (self.left_color == Color.GRAY and self.right_color == Color.GRAY)
-            if both_green or (CONSTANTS.get("TREAT_GRAY_AS_SPILL", False) and both_gray):
+            if both_green:
                 confirm += 1
                 if confirm >= confirm_needed:
                     self.drivebase.stop()
@@ -1071,8 +1016,7 @@ class Robot:
         self.can_move_forward(10)
         self.get_colors()
         in_spill = (
-            (self.left_color == Color.GREEN and self.right_color == Color.GREEN)
-            or (self.left_color == Color.GRAY and self.right_color == Color.GRAY)
+            self.left_color == Color.GREEN and self.right_color == Color.GREEN
         )
         if not in_spill:
             self.can_backtrack()
@@ -1091,14 +1035,19 @@ class Robot:
         self.can_move_forward(-20)
         self.stop_motors()
 
-        mid_angle, min_dist = self.find_can_edges_midpoint(
-            sweep_deg=160, threshold=CONSTANTS["CAN_SCAN_MAX_MM"]
-        )
-        if mid_angle is None:
+        # Use main2.py style 360-degree scan to detect the can direction
+        lowest_ultrasonic, lowest_ultrasonic_angle = self.turn_and_detect_ultrasonic(360)
+        if lowest_ultrasonic is None or lowest_ultrasonic >= 9000:
+            # No valid detection
             self.settings_default()
             return
 
-        self.approach_can_at_angle(mid_angle, stop_offset_mm=20)
+        # Normalize angle similar to main2.py and approach using existing helpers
+        if lowest_ultrasonic_angle > 180:
+            lowest_ultrasonic_angle -= 360
+        # Reset angle reference before approaching
+        self.drivebase.reset()
+        self.approach_can_at_angle(lowest_ultrasonic_angle, stop_offset_mm=20)
 
         self.rotate_arm(-95, stop_method=Stop.COAST, wait=True)
 
@@ -1275,9 +1224,8 @@ class Robot:
             self.rotate_arm(90, stop_method=Stop.COAST)
 
         both_green = (self.left_color == Color.GREEN and self.right_color == Color.GREEN)
-        both_gray = (self.left_color == Color.GRAY and self.right_color == Color.GRAY)
-        if both_green or (CONSTANTS.get("TREAT_GRAY_AS_SPILL", False) and both_gray):
-            self.robot_state = "gray"
+        if both_green:
+            self.robot_state = "spill"
             return
 
         if self.left_color == Color.BLACK and self.right_color == Color.BLACK:
@@ -1304,12 +1252,8 @@ class Robot:
 
         if (
             not self.shortcut_information["is following shortcut"]
-            and self.left_color in [Color.WHITE, Color.BLACK, Color.GRAY]
-            and self.right_color in [Color.WHITE, Color.BLACK, Color.GRAY]
-            and (
-                self.left_color != self.right_color
-                or self.left_color != Color.GRAY
-            )
+            and self.left_color in [Color.WHITE, Color.BLACK]
+            and self.right_color in [Color.WHITE, Color.BLACK]
         ):
             self.robot_state = "line"
 
@@ -1339,7 +1283,7 @@ class Robot:
         if self.robot_state != self.previous_state:
             self.announce_state(self.robot_state)
 
-        if self.robot_state == "gray":
+        if self.robot_state == "spill":
             self.green_spill_ending()
         elif self.robot_state == "obstacle":
             self.avoid_obstacle()
