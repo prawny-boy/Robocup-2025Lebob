@@ -2,6 +2,7 @@ from pybricks.pupdevices import Motor, ColorSensor, UltrasonicSensor
 from pybricks.hubs import PrimeHub
 from pybricks.robotics import DriveBase
 from pybricks.parameters import Port, Color, Axis, Direction, Button, Stop
+from pybricks.tools import StopWatch, wait
 
 ALLOW_YELLOW = True
 
@@ -22,7 +23,7 @@ CONSTANTS = {
     "BACK_AFTER_GREEN_TURN_DISTANCE": 13,
     "TURN_YELLOW_DEGREES": 20,
     "CURVE_RADIUS_GREEN": 78,
-    "CURVE_RADIUS_OBSTACLE": 130,
+    "CURVE_RADIUS_OBSTACLE": 180,
     "OBSTACLE_TURN_DEGREES": 175,
     "OBSTACLE_INITIAL_TURN_DEGREES": 90,
     "OBSTACLE_FINAL_TURN_DEGREES": 70,
@@ -51,6 +52,7 @@ ports = {
 
 class Robot:
     def __init__(self):
+        self.clock = StopWatch()
         self.hub = PrimeHub(Axis.Z, Axis.X)
         self.left_drive = Motor(ports["left_drive"], positive_direction=Direction.COUNTERCLOCKWISE)
         self.right_drive = Motor(ports["right_drive"])
@@ -288,80 +290,12 @@ class Robot:
 
         # self.drivebase.reset()
 
-        # Refine target by sweeping to find left/right edges and aim at midpoint
-        sweep_half = int(CONSTANTS.get("CAN_REFINE_SWEEP_HALF_DEG", 80))
-        edge_margin = int(CONSTANTS.get("CAN_EDGE_MARGIN_MM", 120))
-        edge_threshold = lowest_ultrasonic + edge_margin
-        # Save/adjust turn settings for smoother sweep
-        try:
-            ss, sa, prev_tr, prev_ta = self.drivebase.settings()
-        except Exception:
-            prev_tr = None
-            prev_ta = None
-        try:
-            self.drivebase.settings(
-                turn_rate=int(CONSTANTS.get("CAN_SWEEP_TURN_RATE", 100)),
-                turn_acceleration=int(CONSTANTS.get("CAN_SWEEP_TURN_ACCEL", 300)),
-            )
-        except Exception:
-            pass
-
-        # Move to left of the detected sector and sweep right across
-        self.sharp_turn_in_degrees(lowest_ultrasonic_angle - sweep_half, wait=True)
-        self.drivebase.reset()
-        self.sharp_turn_in_degrees(2 * sweep_half, wait=False)
-
-        saw_inside = False
-        first_enter = None
-        last_seen = None
-        lost = 0
-        confirm = int(CONSTANTS.get("CAN_EDGE_CONFIRM", 3))
-        while not self.drivebase.done():
-            d = self.ultrasonic_sensor.distance()
-            if d is None:
-                d = 9999
-            a = self.drivebase.angle()
-            if d <= edge_threshold:
-                if not saw_inside:
-                    saw_inside = True
-                    first_enter = a
-                last_seen = a
-                lost = 0
-            else:
-                if saw_inside:
-                    lost += 1
-                    if lost >= confirm and last_seen is not None:
-                        break
-        self.drivebase.stop()
-
-        # Restore previous turn settings
-        try:
-            if prev_tr is not None and prev_ta is not None:
-                self.drivebase.settings(turn_rate=prev_tr, turn_acceleration=prev_ta)
-            elif prev_tr is not None:
-                self.drivebase.settings(turn_rate=prev_tr)
-        except Exception:
-            pass
-
-        if first_enter is not None and last_seen is not None:
-            target_angle_rel = (first_enter + last_seen) / 2.0
-            # Rotate from current sweep end to the midpoint
-            delta = target_angle_rel - self.drivebase.angle()
-            self.sharp_turn_in_degrees(delta)
-        else:
-            # Fall back to the raw first-hit angle
-            self.sharp_turn_in_degrees(lowest_ultrasonic_angle)
-
-        # Approach using fresh distance at the refined heading
-        fresh_d = self.ultrasonic_sensor.distance()
-        if fresh_d is None:
-            fresh_d = lowest_ultrasonic
-        approach = max(0, min(240, int(fresh_d) - 20))
-        self.move_forward(approach)
+        self.sharp_turn_in_degrees(lowest_ultrasonic_angle) # Turn to the lowest ultrasonic
+        self.move_forward(min(lowest_ultrasonic - 20, 260)) # Go to the lowest ultrasonic
         self.rotate_arm(-95, stop_method=Stop.COAST, wait=True) # Arm down, capture the can
 
         self.sharp_turn_in_degrees(180)
-        self.move_forward(approach)
+        self.move_forward(min(lowest_ultrasonic - 20, 260))
 
         # self.move_forward(max(-(lowest_ultrasonic - 20), -260)) # Go back to middle
 
@@ -385,7 +319,22 @@ class Robot:
 
         self.move_forward(30) # Hopefully sense the black line again
 
-    # def avoid_obstacle(self):
+    def avoid_obstacle(self):
+        self.stop_motors()
+        self.rotate_arm(-90)
+        self.sharp_turn_in_degrees(CONSTANTS["OBSTACLE_INITIAL_TURN_DEGREES"])
+        self.drivebase.curve(CONSTANTS["CURVE_RADIUS_OBSTACLE"], -CONSTANTS["OBSTACLE_TURN_DEGREES"], Stop.BRAKE, True)
+        self.start_motors(CONSTANTS["OBSTACLE_MOVE_SPEED"], CONSTANTS["OBSTACLE_MOVE_SPEED"])
+
+        self.get_colors() # Re-read colors after turning
+        while self.right_color == Color.WHITE: # Keep turning until right sensor sees something other than white
+            self.get_colors()
+        self.turn_in_degrees(CONSTANTS["OBSTACLE_FINAL_TURN_DEGREES"])
+        self.robot_state = "straight" # Reset state after handling obstacle
+        self.move_arm_back_after_obstacle_time = self.iteration_count + CONSTANTS["OBSTACLE_ARM_RETURN_DELAY"]
+   
+
+    # def OLD_avoid_obstacle(self):
     #     self.stop_motors()
     #     self.rotate_arm(-90)
     #     self.sharp_turn_in_degrees(CONSTANTS["OBSTACLE_INITIAL_TURN_DEGREES"])
@@ -394,7 +343,68 @@ class Robot:
 
     #     self.robot_state = "straight" # Reset state after handling obstacle
     #     self.move_arm_back_after_obstacle_time = self.iteration_count + CONSTANTS["OBSTACLE_ARM_RETURN_DELAY"]
-   
+    def reacquire_line_oscillate(self, step_deg=10, max_deg=120, confirm=2):
+        def confirm_line(n):
+            count = 0
+            for _ in range(max(1, n)):
+                self.get_colors()
+                if self.left_color == Color.BLACK or self.right_color == Color.BLACK:
+                    count += 1
+                else:
+                    count = 0
+                if count >= n:
+                    return True
+                wait(5)
+            return False
+
+        current_offset = 0
+        if confirm_line(confirm):
+            return True
+
+        amp = step_deg
+        while amp <= max_deg:
+            delta = -amp - current_offset
+            if delta != 0:
+                self.sharp_turn_in_degrees(delta)
+                current_offset += delta
+            if confirm_line(confirm):
+                return True
+
+            delta = amp - current_offset
+            if delta != 0:
+                self.sharp_turn_in_degrees(delta)
+                current_offset += delta
+            if confirm_line(confirm):
+                return True
+
+            amp += step_deg
+
+        return False
+
+    def align_to_line_in_place(self, timeout_ms=1500, err_tol=3):
+        start = self.clock.time()
+        prev_err = 0
+        kp = CONSTANTS.get("LINE_KP", 3.2)
+        kd = 0.0
+        max_turn = CONSTANTS.get("LINE_MAX_TURN_RATE", 320)
+        while self.clock.time() - start < timeout_ms:
+            self.get_colors()
+            left_ref = self.left_color_sensor_information["reflection"]
+            right_ref = self.right_color_sensor_information["reflection"]
+            error = right_ref - left_ref if self.on_inverted else left_ref - right_ref
+            d_err = error - prev_err
+            prev_err = error
+            if abs(error) <= err_tol:
+                break
+            turn_rate = kp * error + kd * d_err
+            if turn_rate > max_turn:
+                turn_rate = max_turn
+            elif turn_rate < -max_turn:
+                turn_rate = -max_turn
+            self.drivebase.drive(0, turn_rate)
+            wait(10)
+        self.drivebase.stop()
+
     def avoid_obstacle(self):
         # Modified: arc around obstacle, but proactively rejoin the line by
         # driving until black is detected, then turning RIGHT onto the line.
@@ -456,6 +466,8 @@ class Robot:
         if found:
             self.align_to_line_in_place(timeout_ms=1500, err_tol=3)
 
+        self.rotate_arm(90, stop_method=Stop.COAST)
+       
         self.robot_state = "line"
         self.move_arm_back_after_obstacle_time = self.clock.time() + CONSTANTS["OBSTACLE_ARM_RETURN_DELAY"]
 
