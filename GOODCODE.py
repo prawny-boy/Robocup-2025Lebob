@@ -31,6 +31,7 @@ CONSTANTS = {
     "MAX_TURN_RATE": 100,
     "BLACK_COUNTER_THRESHOLD": 1000,
     "TURNING_WITH_WEIGHT_CORRECITON_MULTIPLIER": 1,
+    "PROPORTIONAL_GAIN": 5,
 }
 
 ports = {
@@ -58,7 +59,7 @@ class Robot:
             self.left_drive,
             self.right_drive,
             CONSTANTS["DRIVEBASE_WHEEL_DIAMETER"],
-            CONSTANTS["DRIVEBASE_AXLE_TRACK"]
+            CONSTANTS["DRIVEBASE_AXLE_TRACK"],
         )
         self.drivebase.use_gyro(False)
         self.settings_default()
@@ -209,7 +210,7 @@ class Robot:
         else:
             reflection_difference = self.right_color_sensor_information["reflection"] - self.left_color_sensor_information["reflection"]
         
-        turn_rate = max(min(4.2 * reflection_difference, CONSTANTS["MAX_TURN_RATE"]), -CONSTANTS["MAX_TURN_RATE"])
+        turn_rate = max(min(CONSTANTS["PROPORTIONAL_GAIN"] * reflection_difference, CONSTANTS["MAX_TURN_RATE"]), -CONSTANTS["MAX_TURN_RATE"])
         self.drivebase.drive(CONSTANTS["MOVE_SPEED"], turn_rate)
 
         while not self.drivebase.done(): # To check if both are black
