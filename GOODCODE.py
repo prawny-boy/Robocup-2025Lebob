@@ -68,6 +68,7 @@ class Robot:
         self.black_counter = 0
         self.on_inverted = False
         self.move_arm_back_after_obstacle_time = False
+        self.has_sensed_green = False
 
         self.shortcut_information = {
             "is following shortcut": False, # If the robot is following a shortcut
@@ -244,6 +245,10 @@ class Robot:
         return lowest_ultrasonic, lowest_ultrasonic_angle
     
     def green_spill_ending(self):
+        if self.has_sensed_green: # Only run the green spill ending once
+            return
+
+        self.has_sensed_green = True
         self.move_forward(10)
         self.get_colors()
         if self.left_color != Color.GREEN or self.right_color != Color.GREEN:
