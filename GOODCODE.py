@@ -3,7 +3,7 @@ from pybricks.hubs import PrimeHub
 from pybricks.robotics import DriveBase
 from pybricks.parameters import Port, Color, Axis, Direction, Button, Stop
 
-ALLOW_YELLOW = False
+ALLOW_YELLOW = True
 
 # --- CONSTANTS ---
 CONSTANTS = {
@@ -291,8 +291,8 @@ class Robot:
 
         return_to_exit_angle = -lowest_ultrasonic_angle
         # return_to_exit_angle = -self.hub.imu.heading() + 180
-        if return_to_exit_angle > 180:
-            return_to_exit_angle -= 360
+        # if return_to_exit_angle > 180:
+        #     return_to_exit_angle -= 360
 
         self.sharp_turn_in_degrees(return_to_exit_angle * CONSTANTS["TURNING_WITH_WEIGHT_CORRECITON_MULTIPLIER"]) # Turn back, and face exit
         self.move_forward(270) # Go to exit
