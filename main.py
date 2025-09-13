@@ -9,13 +9,13 @@ ALLOW_YELLOW = False
 CONSTANTS = {
     "DRIVEBASE_WHEEL_DIAMETER": 56,
     "DRIVEBASE_AXLE_TRACK": 112,
-    "ARM_MOVE_SPEED": 500,
-    "DEFAULT_SPEED": 120,
+    "ARM_MOVE_SPEED": 200,
+    "DEFAULT_SPEED": 80,
     "DEFAULT_ACCELERATION": 600,
     "DEFAULT_TURN_RATE": 100,
     "DEFAULT_TURN_ACCELERATION": 1000,
     "OBSTACLE_MOVE_SPEED": 300,
-    "MOVE_SPEED": 120,
+    "MOVE_SPEED": 80,
     "ULTRASONIC_THRESHOLD": 50,
     "BLACK_WHEEL_SPEED": 30,
     "TURN_GREEN_DEGREES": 50,
@@ -165,7 +165,7 @@ class Robot:
         self.right_color = self.information_to_color(self.right_color_sensor_information)
 
     def both_black_slow(self):
-        self.start_motors(CONSTANTS["BLACK_WHEEL_SPEED"], CONSTANTS["BLACK_WHEEL_SPEED"]) # Slow down a lot
+        self.move_forward(10) # Slow down a lot
     
     def turn_green(self, direction):
         """When there is a green on the left or the right, react to it by doing a larger turn left or right."""
@@ -208,7 +208,7 @@ class Robot:
         else:
             reflection_difference = self.right_color_sensor_information["reflection"] - self.left_color_sensor_information["reflection"]
         
-        turn_rate = max(min(3.5 * reflection_difference, CONSTANTS["MAX_TURN_RATE"]), -CONSTANTS["MAX_TURN_RATE"])
+        turn_rate = max(min(4.2 * reflection_difference, CONSTANTS["MAX_TURN_RATE"]), -CONSTANTS["MAX_TURN_RATE"])
         self.drivebase.drive(CONSTANTS["MOVE_SPEED"], turn_rate)
 
         while not self.drivebase.done(): # To check if both are black
@@ -269,30 +269,35 @@ class Robot:
         while lowest_ultrasonic == 2000:
             lowest_ultrasonic, lowest_ultrasonic_angle = self.turn_and_detect_ultrasonic() # Turn 360 degrees, find the lowest ultrasonic and angle
 
-        if lowest_ultrasonic_angle > 180:
-            lowest_ultrasonic_angle -= 360
+        # if lowest_ultrasonic_angle > 180:
+        #     lowest_ultrasonic_angle -= 360
 
-        self.drivebase.reset()
+        # self.drivebase.reset()
 
         self.sharp_turn_in_degrees(lowest_ultrasonic_angle) # Turn to the lowest ultrasonic
-        self.move_forward(lowest_ultrasonic - 20) # Go to the lowest ultrasonic
+        self.move_forward(min(lowest_ultrasonic - 20, 260)) # Go to the lowest ultrasonic
         self.rotate_arm(-95, stop_method=Stop.COAST, wait=True) # Arm down, capture the can
 
-        # self.sharp_turn_in_degrees(180)
-        self.move_forward(-(lowest_ultrasonic - 20)) # Go back to middle
+        self.sharp_turn_in_degrees(180)
+        self.move_forward(min(lowest_ultrasonic - 20, 260))
 
-        return_to_exit_angle = -self.hub.imu.heading() + 180
+        # self.move_forward(max(-(lowest_ultrasonic - 20), -260)) # Go back to middle
+
+        return_to_exit_angle = -lowest_ultrasonic_angle
+        # return_to_exit_angle = -self.hub.imu.heading() + 180
         if return_to_exit_angle > 180:
             return_to_exit_angle -= 360
 
         self.sharp_turn_in_degrees(return_to_exit_angle * CONSTANTS["TURNING_WITH_WEIGHT_CORRECITON_MULTIPLIER"]) # Turn back, and face exit
         self.move_forward(270) # Go to exit
 
-        self.sharp_turn_in_degrees(60) # Turn 45 degrees 
-        self.move_forward(70) # Go forward a bit so the can is not on the path
+        away_can_angle = 50
+        away_can_distance = 58
+        self.sharp_turn_in_degrees(away_can_angle)
+        self.move_forward(away_can_distance) # Go forward a bit so the can is not on the path
         self.rotate_arm(180) # Arm up, release the can
-        self.move_forward(-70) # Go back
-        self.sharp_turn_in_degrees(-60) # Turn back
+        self.move_forward(-away_can_distance) # Go back
+        self.sharp_turn_in_degrees(-away_can_angle) # Turn back
 
         self.settings_default() # Reset speed and settings
 
