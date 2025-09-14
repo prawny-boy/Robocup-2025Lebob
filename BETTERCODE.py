@@ -191,19 +191,32 @@ class Robot:
 
     def turn_green(self, direction):
         """When there is a green on the left or the right, react to it by doing a larger turn left or right."""
-
-        # Check if it actually green and not an error
-        self.move_forward(10)
+        # Fresh read first
         self.get_colors()
         new_left_color = self.information_to_color(self.left_color_sensor_information)
         new_right_color = self.information_to_color(self.right_color_sensor_information)
 
-        if not ((direction == "left" and new_left_color == Color.GREEN) or (direction == "right" and new_right_color == Color.GREEN)):
-            return
-        elif (new_left_color == new_right_color == Color.GREEN):
-            self.drivebase.stop()
-            self.green_spill_ending()
-            return
+        # If both sensors see green, immediately start the spill sequence
+        if new_left_color == Color.GREEN and new_right_color == Color.GREEN:
+            self.stop_motors()
+            
+            self.move_forward(35)
+            self.get_colors()
+            if self.left_color == Color.GREEN or self.right_color == Color.GREEN:
+                self.move_forward(-35)
+            
+                self.green_spill_ending()
+                return
+            else:
+                self.move_forward(-30)
+
+        # If the indicated side is no longer green, abort turn
+        # if (direction == "left" and new_left_color != Color.GREEN) or (direction == "right" and new_right_color != Color.GREEN):
+        #     return
+
+        else:
+            # Small nudge forward to engage with the marker before turning
+            self.move_forward(5)
 
         if direction == "left":
             degrees = -CONSTANTS["TURN_GREEN_DEGREES"]
@@ -242,8 +255,11 @@ class Robot:
                 self.black_counter += 1
 
     def blue_pause(self):
-        wait(4000)
-        self.move_forward(20)
+        self.stop_motors()
+        self.speaker.beep(220, 500)
+        self.speaker.beep(320, 500)
+        self.speaker.beep(420, 500)
+        self.move_forward(60)
     
     def follow_color(self, color_to_follow=Color.YELLOW):
         if self.left_color == color_to_follow:
@@ -255,6 +271,8 @@ class Robot:
                 self.sharp_turn_in_degrees(-75)
             else:
                 self.sharp_turn_in_degrees(75)
+                
+            self.shortcut_information = self.default_shortcut_information.copy()
         else:
             self.move_forward(10, wait=False)
 
@@ -275,9 +293,7 @@ class Robot:
                 lowest_ultrasonic = new_ultrasonic
                 lowest_ultrasonic_angle = self.drivebase.angle()
 
-            self.speaker.beep(800, 50)
-            self.speaker.beep(500, 50)
-            self.speaker.beep(800, 50)
+                self.speaker.beep(800, 10)
 
             print(new_ultrasonic, self.drivebase.angle())
 
@@ -290,6 +306,7 @@ class Robot:
         self.speaker.beep(587, 60)
         if self.has_sensed_green: # Only run the green spill ending once
             self.speaker.beep(200, 30)
+            self.move_forward(10)
             return
 
         self.has_sensed_green = True
@@ -298,6 +315,7 @@ class Robot:
         if self.left_color != Color.GREEN or self.right_color != Color.GREEN:
             self.speaker.beep(200, 30)
             self.move_forward(-20)
+            self.has_sensed_green = False
             return
 
         self.drivebase.settings( # Slow down
@@ -544,7 +562,7 @@ class Robot:
         #     return
         
         # Blue
-        if self.color_sensor_left == Color.BLUE or self.color_sensor_right == Color.BLUE:
+        if self.left_color == Color.BLUE or self.right_color == Color.BLUE:
             self.blue_pause()
 
         # Black both
@@ -592,6 +610,9 @@ class Robot:
             self.robot_state = "line"
 
         # Turn / Green
+        elif self.left_color == Color.GREEN and self.right_color == Color.GREEN:
+            # Both green detected -> enter spill ending immediately
+            self.robot_state = "green both"
         elif self.left_color == Color.GREEN:
             self.robot_state = "green left"
         elif self.right_color == Color.GREEN:
@@ -632,6 +653,9 @@ class Robot:
         elif self.robot_state == "green right":
             self.stop_motors()
             self.turn_green("right")
+        elif self.robot_state == "green both":
+            self.stop_motors()
+            self.green_spill_ending()
 
         # Stop
         elif self.robot_state == "stop":
