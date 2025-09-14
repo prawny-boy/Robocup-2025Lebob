@@ -78,6 +78,8 @@ class Robot:
         self.on_inverted = False
         # self.move_arm_back_after_obstacle_time = False
         self.has_sensed_green = False
+        # Ignore switching back to line for a short window when entering spill
+        self.spill_ignore_line_until_ms = 0
 
         self.shortcut_information = {
             "is following shortcut": False, # If the robot is following a shortcut
@@ -199,16 +201,29 @@ class Robot:
         # If both sensors see green, immediately start the spill sequence
         if new_left_color == Color.GREEN and new_right_color == Color.GREEN:
             self.stop_motors()
-            
-            self.move_forward(35)
-            self.get_colors()
-            if self.left_color == Color.GREEN or self.right_color == Color.GREEN:
-                self.move_forward(-35)
-            
+            self.spill_ignore_line_until_ms = self.clock.time() + int(CONSTANTS.get("SPILL_IGNORE_LINE_MS", 1500))
+            self.green_spill_ending()
+            return
+
+        # Handle reflective tape: green on one side plus very bright, low-sat white on the other
+        ref_min = int(CONSTANTS.get("SPILL_REFLECT_REF_MIN", 75))
+        s_max = int(CONSTANTS.get("SPILL_REFLECT_S_MAX", 25))
+        if new_left_color == Color.GREEN:
+            rr = self.right_color_sensor_information["reflection"]
+            rs = self.right_color_sensor_information["hsv"].s
+            if self.right_color == Color.WHITE and rr >= ref_min and rs <= s_max:
+                self.stop_motors()
+                self.spill_ignore_line_until_ms = self.clock.time() + int(CONSTANTS.get("SPILL_IGNORE_LINE_MS", 1500))
                 self.green_spill_ending()
                 return
-            else:
-                self.move_forward(-30)
+        if new_right_color == Color.GREEN:
+            lr = self.left_color_sensor_information["reflection"]
+            ls = self.left_color_sensor_information["hsv"].s
+            if self.left_color == Color.WHITE and lr >= ref_min and ls <= s_max:
+                self.stop_motors()
+                self.spill_ignore_line_until_ms = self.clock.time() + int(CONSTANTS.get("SPILL_IGNORE_LINE_MS", 1500))
+                self.green_spill_ending()
+                return
 
         # If the indicated side is no longer green, abort turn
         # if (direction == "left" and new_left_color != Color.GREEN) or (direction == "right" and new_right_color != Color.GREEN):
@@ -310,13 +325,10 @@ class Robot:
             return
 
         self.has_sensed_green = True
+        # Move forward into spill; ignore reflective tape at entrance and do not abort on re-check
         self.move_forward(20)
-        self.get_colors()
-        if self.left_color != Color.GREEN or self.right_color != Color.GREEN:
-            self.speaker.beep(200, 30)
-            self.move_forward(-20)
-            self.has_sensed_green = False
-            return
+        # Suppress line-state bouncing for a short window due to reflective tape
+        self.spill_ignore_line_until_ms = self.clock.time() + int(CONSTANTS.get("SPILL_IGNORE_LINE_MS", 1500))
 
         self.drivebase.settings( # Slow down
             straight_speed=80,
@@ -603,20 +615,35 @@ class Robot:
            
             self.shortcut_information["is following shortcut"] = True
        
-        # Line
-        elif not self.shortcut_information["is following shortcut"] and \
-            self.left_color in [Color.WHITE, Color.BLACK] and \
-            self.right_color in [Color.WHITE, Color.BLACK]:
+        # Line (suppressed briefly when entering spill to ignore reflective tape)
+        elif (not self.shortcut_information["is following shortcut"]) and \
+            (self.clock.time() >= self.spill_ignore_line_until_ms) and \
+            (self.left_color in [Color.WHITE, Color.BLACK]) and \
+            (self.right_color in [Color.WHITE, Color.BLACK]):
             self.robot_state = "line"
 
-        # Turn / Green
+        # Turn / Green (prioritize green over line, and handle reflective tape)
         elif self.left_color == Color.GREEN and self.right_color == Color.GREEN:
             # Both green detected -> enter spill ending immediately
             self.robot_state = "green both"
+            self.spill_ignore_line_until_ms = self.clock.time() + int(CONSTANTS.get("SPILL_IGNORE_LINE_MS", 1500))
         elif self.left_color == Color.GREEN:
-            self.robot_state = "green left"
+            # If other side looks like reflective tape (very bright white, low saturation), treat as both
+            rr = self.right_color_sensor_information["reflection"]
+            rs = self.right_color_sensor_information["hsv"].s
+            if (self.right_color == Color.WHITE and rr >= int(CONSTANTS.get("SPILL_REFLECT_REF_MIN", 75)) and rs <= int(CONSTANTS.get("SPILL_REFLECT_S_MAX", 25))):
+                self.robot_state = "green both"
+            else:
+                self.robot_state = "green left"
+            self.spill_ignore_line_until_ms = self.clock.time() + int(CONSTANTS.get("SPILL_IGNORE_LINE_MS", 1500))
         elif self.right_color == Color.GREEN:
-            self.robot_state = "green right"
+            lr = self.left_color_sensor_information["reflection"]
+            ls = self.left_color_sensor_information["hsv"].s
+            if (self.left_color == Color.WHITE and lr >= int(CONSTANTS.get("SPILL_REFLECT_REF_MIN", 75)) and ls <= int(CONSTANTS.get("SPILL_REFLECT_S_MAX", 25))):
+                self.robot_state = "green both"
+            else:
+                self.robot_state = "green right"
+            self.spill_ignore_line_until_ms = self.clock.time() + int(CONSTANTS.get("SPILL_IGNORE_LINE_MS", 1500))
 
         # Nothing
         else:
