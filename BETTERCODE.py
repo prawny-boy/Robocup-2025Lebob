@@ -23,7 +23,7 @@ CONSTANTS = {
     "BACK_AFTER_GREEN_TURN_DISTANCE": 13,
     "TURN_YELLOW_DEGREES": 20,
     "CURVE_RADIUS_GREEN": 78,
-    "CURVE_RADIUS_OBSTACLE": 180,
+    "CURVE_RADIUS_OBSTACLE": 200,
     "OBSTACLE_TURN_DEGREES": 175,
     "OBSTACLE_INITIAL_TURN_DEGREES": 90,
     "OBSTACLE_FINAL_TURN_DEGREES": 70,
@@ -76,7 +76,7 @@ class Robot:
         self.iteration_count = 0 # Initialize the iteration counter
         self.black_counter = 0
         self.on_inverted = False
-        self.move_arm_back_after_obstacle_time = False
+        # self.move_arm_back_after_obstacle_time = False
         self.has_sensed_green = False
 
         self.shortcut_information = {
@@ -86,6 +86,7 @@ class Robot:
             "right seen black since": False # If the right sensor has seen black since the last shortcut
         }
         self.default_shortcut_information = self.shortcut_information.copy()
+        self.speaker = self.hub.speaker
 
     def settings_default(self):
         self.drivebase.settings(
@@ -255,6 +256,8 @@ class Robot:
         return lowest_ultrasonic, lowest_ultrasonic_angle
     
     def green_spill_ending(self):
+        self.speaker.beep(500, 40)
+        self.speaker.beep(300, 40)
         self.move_forward(20)
         if self.has_sensed_green: # Only run the green spill ending once
             return
@@ -319,30 +322,25 @@ class Robot:
 
         self.move_forward(30) # Hopefully sense the black line again
 
-    def avoid_obstacle(self):
-        self.stop_motors()
-        self.rotate_arm(-90)
-        self.sharp_turn_in_degrees(CONSTANTS["OBSTACLE_INITIAL_TURN_DEGREES"])
-        self.drivebase.curve(CONSTANTS["CURVE_RADIUS_OBSTACLE"], -CONSTANTS["OBSTACLE_TURN_DEGREES"], Stop.BRAKE, True)
-        self.start_motors(CONSTANTS["OBSTACLE_MOVE_SPEED"], CONSTANTS["OBSTACLE_MOVE_SPEED"])
+                                # THIS IS THE OLD ONE
+                                # def avoid_obstacle(self):
+                                #     self.speaker.beep(260, 40)
+                                #     self.speaker.beep(400, 40)
 
-        self.get_colors() # Re-read colors after turning
-        while self.right_color == Color.WHITE: # Keep turning until right sensor sees something other than white
-            self.get_colors()
-        self.turn_in_degrees(CONSTANTS["OBSTACLE_FINAL_TURN_DEGREES"])
-        self.robot_state = "straight" # Reset state after handling obstacle
-        self.move_arm_back_after_obstacle_time = self.iteration_count + CONSTANTS["OBSTACLE_ARM_RETURN_DELAY"]
-    
 
-    # def OLD_avoid_obstacle(self):
-    #     self.stop_motors()
-    #     self.rotate_arm(-90)
-    #     self.sharp_turn_in_degrees(CONSTANTS["OBSTACLE_INITIAL_TURN_DEGREES"])
-    #     self.drivebase.curve(CONSTANTS["CURVE_RADIUS_OBSTACLE"], -CONSTANTS["OBSTACLE_TURN_DEGREES"], Stop.BRAKE, True)
-    #     self.start_motors(CONSTANTS["OBSTACLE_MOVE_SPEED"], CONSTANTS["OBSTACLE_MOVE_SPEED"])
+                                #     self.stop_motors()
+                                #     self.rotate_arm(-90)
+                                #     self.sharp_turn_in_degrees(CONSTANTS["OBSTACLE_INITIAL_TURN_DEGREES"])
+                                #     self.drivebase.curve(CONSTANTS["CURVE_RADIUS_OBSTACLE"], -CONSTANTS["OBSTACLE_TURN_DEGREES"], Stop.BRAKE, True)
+                                #     self.start_motors(CONSTANTS["OBSTACLE_MOVE_SPEED"], CONSTANTS["OBSTACLE_MOVE_SPEED"])
 
-    #     self.robot_state = "straight" # Reset state after handling obstacle
-    #     self.move_arm_back_after_obstacle_time = self.iteration_count + CONSTANTS["OBSTACLE_ARM_RETURN_DELAY"]
+                                #     self.get_colors() # Re-read colors after turning
+                                #     while self.right_color == Color.WHITE: # Keep turning until right sensor sees something other than white
+                                #         self.get_colors()
+                                #     self.turn_in_degrees(CONSTANTS["OBSTACLE_FINAL_TURN_DEGREES"])
+                                #     self.robot_state = "straight" # Reset state after handling obstacle
+                                #     self.move_arm_back_after_obstacle_time = self.iteration_count + CONSTANTS["OBSTACLE_ARM_RETURN_DELAY"]
+
     def reacquire_line_oscillate(self, step_deg=10, max_deg=120, confirm=2):
         def confirm_line(n):
             count = 0
@@ -406,8 +404,10 @@ class Robot:
         self.drivebase.stop()
 
     def avoid_obstacle(self):
+        self.speaker.beep(300, 100)
+
         self.stop_motors()
-        self.rotate_arm(-90)
+        self.rotate_arm(-90, wait=True)
 
         # Initial sidestep turn
         self.sharp_turn_in_degrees(CONSTANTS["OBSTACLE_INITIAL_TURN_DEGREES"])
@@ -444,11 +444,21 @@ class Robot:
                 self.move_forward(entry_fwd)
             self.sharp_turn_in_degrees(abs(int(CONSTANTS.get("OBSTACLE_RIGHT_ALIGN_DEG", 90))), wait=True)
             # No sweeping/align; immediately resume line following in that direction
+            # self.move_arm_back_after_obstacle_time = self.clock.time() + CONSTANTS["OBSTACLE_ARM_RETURN_DELAY"]
+            self.speaker.beep(600, 100)
+            self.speaker.beep(500, 100)
+            self.speaker.beep(400, 100)
+            self.speaker.beep(300, 100)
+            print("COOKED POINT")
+
+            self.rotate_arm(90, stop_method=Stop.COAST, wait=False)
+            self.sharp_turn_in_degrees(10)
             self.robot_state = "line"
-            self.move_arm_back_after_obstacle_time = self.clock.time() + CONSTANTS["OBSTACLE_ARM_RETURN_DELAY"]
+            print(self.robot_state)
+
             return
 
-        # Fallback: if we never detected black during the arc, use oscillating reacquire
+        # If never detected black during the arc, use oscillating reacquire
         found = self.reacquire_line_oscillate(
             step_deg=CONSTANTS.get("LINE_REACQUIRE_TURN_STEP_DEG", 10),
             max_deg=CONSTANTS.get("LINE_REACQUIRE_TURN_MAX_DEG", 120),
@@ -464,10 +474,12 @@ class Robot:
         if found:
             self.align_to_line_in_place(timeout_ms=1500, err_tol=3)
 
+        self.speaker.beep(400, 100)
         self.rotate_arm(90, stop_method=Stop.COAST, wait=True)
         
         self.robot_state = "line"
-        self.move_arm_back_after_obstacle_time = self.clock.time() + CONSTANTS["OBSTACLE_ARM_RETURN_DELAY"]
+        # self.move_arm_back_after_obstacle_time = self.clock.time() + CONSTANTS["OBSTACLE_ARM_RETURN_DELAY"]
+
 
     def update(self):
         
@@ -477,10 +489,10 @@ class Robot:
 
         self.previous_state = self.robot_state
 
-        if self.move_arm_back_after_obstacle_time != False:
-            if self.iteration_count > self.move_arm_back_after_obstacle_time:
-                self.move_arm_back_after_obstacle_time = False
-                self.rotate_arm(90, stop_method=Stop.COAST)
+        # if self._after_obstacle_time != False:
+        #     if self.iteration_count > self.move_arm_back_after_obstacle_time:
+        #         self.move_arm_back_after_obstacle_timmove_arm_backe = False
+        #         self.rotate_arm(90, stop_method=Stop.COAST)
 
         # if (self.left_color == Color.GRAY and self.right_color == Color.GRAY) or (self.left_color == Color.GREEN and self.right_color == Color.GREEN):
         #     self.robot_state = "gray"
@@ -561,9 +573,14 @@ class Robot:
         # Obstacle
         if self.robot_state == "obstacle":
             self.avoid_obstacle()
+            self.robot_state = "line"
+            self.speaker.beep(300, 50)
+            self.speaker.beep(350, 50)
+            self.speaker.beep(390, 50)
+
 
         # ShortcutYellow
-        elif self.shortcut_information["is following shortcut"]:
+        if self.shortcut_information["is following shortcut"]:
             self.follow_color()
         
         # Line
@@ -584,7 +601,7 @@ class Robot:
 
     def debug(self):
         """Print debug text."""
-        # print(self.robot_state)
+        print(self.robot_state)
         # print(self.left_color_sensor_information, self.left_color)
         # print(self.right_color_sensor_information, self.right_color)
         # print(self.left_color, self.right_color)
@@ -599,7 +616,7 @@ class Robot:
             self.iteration_count += 1 # Increment the counter at the start of each loop
             self.update()
             self.move()
-            # self.debug()
+            self.debug()
 
 def main():
     robot = Robot()
