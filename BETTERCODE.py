@@ -30,7 +30,7 @@ CONSTANTS = {
     "OBSTACLE_ARM_RETURN_DELAY": 3000,
     "CURVE_RADIUS_LINE_FOLLOW": 4,
     "MAX_TURN_RATE": 100,
-    "BLACK_COUNTER_THRESHOLD": 1000,
+    "BLACK_COUNTER_THRESHOLD": 12,
     "TURNING_WITH_WEIGHT_CORRECITON_MULTIPLIER": 1,
     # Can edge-refinement sweep tuning
     "CAN_REFINE_SWEEP_HALF_DEG": 80,
@@ -38,7 +38,7 @@ CONSTANTS = {
     "CAN_EDGE_CONFIRM": 3,
     "CAN_SWEEP_TURN_RATE": 100,
     "CAN_SWEEP_TURN_ACCEL": 300,
-    "PROPORTIONAL_GAIN": 4.7,
+    "PROPORTIONAL_GAIN": 4.5,
 }
 
 ports = {
@@ -169,7 +169,7 @@ class Robot:
             return Color.YELLOW
         elif information["color"] == Color.GREEN and 135 < information["hsv"].h < 165 and information["hsv"].s > 30:
             return Color.GREEN
-        elif information["color"] == Color.BLUE and information["hsv"].s > 80 and information["hsv"].v > 80:
+        elif information["color"] == Color.BLUE and information["hsv"].s > 60 and information["reflection"] < 30:
             return Color.BLUE
         elif information["color"] == Color.RED and information["hsv"].s > 85:
             return Color.RED
@@ -223,7 +223,7 @@ class Robot:
         # Beep once when starting a green turn (left or right)
         self.beep(1, frequency=1000, duration=100)
 
-        self.drivebase.curve(CONSTANTS["CURVE_RADIUS_GREEN"], degrees, Stop.COAST, True)
+        self.drivebase.curve(CONSTANTS["CURVE_RADIUS_GREEN"], degrees, Stop.COAST, False)
 
         stop = False
         while not self.drivebase.done():
@@ -232,14 +232,14 @@ class Robot:
                 self.drivebase.stop()
                 self.green_spill_ending()
                 stop = True
-                break
+                return
 
         if not stop:
             self.move_forward(-CONSTANTS["BACK_AFTER_GREEN_TURN_DISTANCE"])
 
     def follow_line(self):
         if not self.on_inverted:
-            reflection_difference = (self.left_color_sensor_information["reflection"] + 2) - self.right_color_sensor_information["reflection"]
+            reflection_difference = (self.left_color_sensor_information["reflection"] + 8) - self.right_color_sensor_information["reflection"]
         else:
             reflection_difference = self.right_color_sensor_information["reflection"] - self.left_color_sensor_information["reflection"]
 
@@ -252,11 +252,20 @@ class Robot:
                 self.both_black_slow()
                 self.black_counter += 1
 
+    def blue_pause(self):
+        wait(4000)
+        self.move_forward(20)
+    
     def follow_color(self, color_to_follow=Color.YELLOW):
         if self.left_color == color_to_follow:
             self.turn_in_degrees(-CONSTANTS["TURN_YELLOW_DEGREES"])
         elif self.right_color == color_to_follow:
             self.turn_in_degrees(CONSTANTS["TURN_YELLOW_DEGREES"])
+        elif (self.left_color == Color.BLACK or self.right_color == Color.BLACK):
+            if self.shortcut_information["first turned"] == "left":
+                self.sharp_turn_in_degrees(-90)
+            else:
+                self.sharp_turn_in_degrees(90)
         else:
             self.move_forward(10, wait=False)
 
@@ -268,6 +277,8 @@ class Robot:
         self.drivebase.reset()
         self.sharp_turn_in_degrees(degrees, wait=False)
 
+        self.speaker.beep(200, -1)
+
         while not self.drivebase.done():
             new_ultrasonic = self.ultrasonic_sensor.distance()
 
@@ -275,21 +286,29 @@ class Robot:
                 lowest_ultrasonic = new_ultrasonic
                 lowest_ultrasonic_angle = self.drivebase.angle()
 
+            self.speaker.beep(800, 50)
+            self.speaker.beep(500, 50)
+            self.speaker.beep(800, 50)
+
             print(new_ultrasonic, self.drivebase.angle())
+
         return lowest_ultrasonic, lowest_ultrasonic_angle
    
     def green_spill_ending(self):
-        self.speaker.beep(500, 40)
-        self.speaker.beep(300, 40)
-        self.move_forward(20)
+        self.speaker.beep(440, 60)
+        self.speaker.beep(494, 20)
+        self.speaker.beep(523, 40)
+        self.speaker.beep(587, 60)
         if self.has_sensed_green: # Only run the green spill ending once
+            self.speaker.beep(200, 30)
             return
 
         self.has_sensed_green = True
-        self.move_forward(10)
+        self.move_forward(20)
         self.get_colors()
         if self.left_color != Color.GREEN or self.right_color != Color.GREEN:
-            self.move_forward(-10)
+            self.speaker.beep(200, 30)
+            self.move_forward(-20)
             return
 
         self.drivebase.settings( # Slow down
@@ -301,11 +320,14 @@ class Robot:
 
         self.rotate_arm(-86, stop_method=Stop.HOLD) # Arm up
 
-        self.move_forward(280) # Go to middle - 10 (because already moved forward 10)
+        self.move_forward(260) # Go to middle - 20 (because already moved forward 20)
         self.move_forward(-20) # Go back just in case hit the can
         # self.hub.imu.reset_heading(0)
 
         self.stop_motors() # Stop
+
+        self.speaker.beep(500, 50)
+        self.speaker.beep(400, 50)
 
         lowest_ultrasonic = 2000
         while lowest_ultrasonic == 2000:
@@ -316,22 +338,32 @@ class Robot:
 
         # self.drivebase.reset()
 
-        self.sharp_turn_in_degrees(lowest_ultrasonic_angle) # Turn to the lowest ultrasonic
-        self.move_forward(min(lowest_ultrasonic - 20, 260)) # Go to the lowest ultrasonic
+        self.sharp_turn_in_degrees(lowest_ultrasonic_angle) # Turn to the can
+        distance_to_can = min(lowest_ultrasonic - 20, 260)
+        self.move_forward(distance_to_can) # Go to the can
         self.rotate_arm(-95, stop_method=Stop.COAST, wait=True) # Arm down, capture the can
 
-        self.sharp_turn_in_degrees(180)
-        self.move_forward(min(lowest_ultrasonic - 20, 260))
+        self.sharp_turn_in_degrees(180) # Turn to centre
+        self.move_forward(distance_to_can) # Move to centre
 
         # self.move_forward(max(-(lowest_ultrasonic - 20), -260)) # Go back to middle
 
         return_to_exit_angle = -lowest_ultrasonic_angle
+
+        # Use IMU heading to find return angle, doesn't work
         # return_to_exit_angle = -self.hub.imu.heading() + 180
         # if return_to_exit_angle > 180:
         #     return_to_exit_angle -= 360
 
-        self.sharp_turn_in_degrees(return_to_exit_angle * CONSTANTS["TURNING_WITH_WEIGHT_CORRECITON_MULTIPLIER"]) # Turn back, and face exit
-        self.move_forward(270) # Go to exit
+        # self.sharp_turn_in_degrees(return_to_exit_angle * CONSTANTS["TURNING_WITH_WEIGHT_CORRECITON_MULTIPLIER"]) # Turn to exit
+        self.sharp_turn_in_degrees(return_to_exit_angle) # Turn back, and face exit
+        self.move_forward(280) # Go to exit
+
+        self.speaker.beep(523, 40)
+        self.speaker.beep(587, 40)
+        self.speaker.beep(659, 40)
+        self.speaker.beep(587, 40)
+        self.speaker.beep(523, 40)
 
         away_can_angle = 50
         away_can_distance = 58
@@ -522,12 +554,18 @@ class Robot:
         #     self.robot_state = "gray"
         #     return
         
+        # Blue
+        if self.color_sensor_left == Color.BLUE or self.color_sensor_right == Color.BLUE:
+            self.blue_pause()
+
+        # Black both
         if self.left_color == Color.BLACK and self.right_color == Color.BLACK:
             self.black_counter += 1
             self.both_black_slow()
         else:
             self.black_counter = 0
-       
+
+        # Inverted (broken)
         if self.black_counter > CONSTANTS["BLACK_COUNTER_THRESHOLD"]:
             self.on_inverted = True
         if self.left_color == Color.WHITE and self.right_color == Color.WHITE:
@@ -547,13 +585,13 @@ class Robot:
                 if self.left_color == Color.YELLOW:
                     self.turn_in_degrees(-90)
 
-                    if self.shortcut_information["first turned"] == None:
+                    if self.shortcut_information["first turned"] is None:
                         self.shortcut_information["first turned"] = "left"
 
                 if self.right_color == Color.YELLOW:
                     self.turn_in_degrees(90)
 
-                    if self.shortcut_information["first turned"] == None:
+                    if self.shortcut_information["first turned"] is None:
                         self.shortcut_information["first turned"] = "right"
            
             self.shortcut_information["is following shortcut"] = True
@@ -574,21 +612,6 @@ class Robot:
         else:
             self.robot_state = "line"
             # self.robot_state = "stop"
-
-        # Stopping shortcut
-        if self.left_color == Color.BLACK:
-            self.shortcut_information["left seen black since"] = True
-        if self.right_color == Color.BLACK:
-            self.shortcut_information["right seen black since"] = True
-
-        if self.shortcut_information["left seen black since"] and self.shortcut_information["right seen black since"]:
-            if self.shortcut_information["first turned"] == "left":
-                self.turn_in_degrees(90) # Turn right if it turned left for the shortcut
-            else:
-                self.turn_in_degrees(-90) # Turn left if it turned right for the shortcut
-
-            self.robot_state = "line" # Go back to normal line following
-            self.shortcut_information = self.default_shortcut_information.copy()
 
     def move(self):
         """Move the robot based on its current state."""
@@ -627,9 +650,9 @@ class Robot:
 
     def debug(self):
         """Print debug text."""
-        print(self.robot_state)
-        # print(self.left_color_sensor_information, self.left_color)
-        # print(self.right_color_sensor_information, self.right_color)
+        print("STATE", self.robot_state)
+        # print("LEFT", self.left_color_sensor_information, self.left_color)
+        # print("RIGHT", self.right_color_sensor_information, self.right_color)
         # print(self.left_color, self.right_color)
         # print(self.iteration_count)
         # print(self.ultrasonic)
