@@ -199,10 +199,10 @@ class Robot:
 
     def both_black_slow(self):
         self.move_forward(10) # Slow down a lot
-   
+
     def turn_green(self, direction):
         """When there is a green on the left or the right, react to it by doing a larger turn left or right."""
-       
+
         # Check if it actually green and not an error
         self.move_forward(10)
         self.get_colors()
@@ -233,17 +233,16 @@ class Robot:
                 self.green_spill_ending()
                 stop = True
                 break
-       
+
         if not stop:
             self.move_forward(-CONSTANTS["BACK_AFTER_GREEN_TURN_DISTANCE"])
-
 
     def follow_line(self):
         if not self.on_inverted:
             reflection_difference = (self.left_color_sensor_information["reflection"] + 2) - self.right_color_sensor_information["reflection"]
         else:
             reflection_difference = self.right_color_sensor_information["reflection"] - self.left_color_sensor_information["reflection"]
-       
+
         turn_rate = max(min(CONSTANTS["PROPORTIONAL_GAIN"] * reflection_difference, CONSTANTS["MAX_TURN_RATE"]), -CONSTANTS["MAX_TURN_RATE"])
         self.drivebase.drive(CONSTANTS["MOVE_SPEED"], turn_rate)
 
@@ -252,7 +251,7 @@ class Robot:
             if self.left_color == Color.BLACK and self.right_color == Color.BLACK:
                 self.both_black_slow()
                 self.black_counter += 1
-   
+
     def follow_color(self, color_to_follow=Color.YELLOW):
         if self.left_color == color_to_follow:
             self.turn_in_degrees(-CONSTANTS["TURN_YELLOW_DEGREES"])
