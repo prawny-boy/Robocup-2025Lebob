@@ -11,12 +11,12 @@ CONSTANTS = {
     "DRIVEBASE_WHEEL_DIAMETER": 56,
     "DRIVEBASE_AXLE_TRACK": 112,
     "ARM_MOVE_SPEED": 200,
-    "DEFAULT_SPEED": 80,
+    "DEFAULT_SPEED": 83,
     "DEFAULT_ACCELERATION": 600,
-    "DEFAULT_TURN_RATE": 60,
+    "DEFAULT_TURN_RATE": 61,
     "DEFAULT_TURN_ACCELERATION": 800,
     "OBSTACLE_MOVE_SPEED": 300,
-    "MOVE_SPEED": 80,
+    "MOVE_SPEED": 83,
     "ULTRASONIC_THRESHOLD": 50,
     "BLACK_WHEEL_SPEED": 30,
     "TURN_GREEN_DEGREES": 50,
@@ -114,9 +114,9 @@ class Robot:
 
         print("Battery:", battery_voltage)
    
-    def turn_in_degrees(self, degrees, wait=False):
+    def turn_in_degrees(self, degrees, wait=False, radius=CONSTANTS["CURVE_RADIUS_LINE_FOLLOW"]):
         """Turn in degrees. Using a curve for line following."""
-        self.drivebase.curve(CONSTANTS["CURVE_RADIUS_LINE_FOLLOW"], degrees, Stop.COAST, wait)
+        self.drivebase.curve(radius, degrees, Stop.COAST, wait)
 
     def sharp_turn_in_degrees(self, degrees, wait=True):
         """Perform a sharp turn in degrees."""
@@ -152,8 +152,8 @@ class Robot:
 
     def information_to_color(self, information):
         """Convert color sensor information to a color."""
-        if information["reflection"] > 99: # Probably needs to be better
-            return Color.WHITE
+        if information["reflection"] > 96: # Probably needs to be 
+            return Color.GRAY
         elif information["color"] == Color.WHITE:
             return Color.WHITE
         elif information["hsv"].h < 67 and information["hsv"].h > 45 and ALLOW_YELLOW:
@@ -256,7 +256,7 @@ class Robot:
 
     def follow_line(self):
         if not self.on_inverted:
-            reflection_difference = (self.left_color_sensor_information["reflection"] + 8) - self.right_color_sensor_information["reflection"]
+            reflection_difference = (self.left_color_sensor_information["reflection"] + 10) - self.right_color_sensor_information["reflection"]
         else:
             reflection_difference = self.right_color_sensor_information["reflection"] - self.left_color_sensor_information["reflection"]
 
@@ -308,7 +308,10 @@ class Robot:
                 lowest_ultrasonic = new_ultrasonic
                 lowest_ultrasonic_angle = self.drivebase.angle()
 
-                self.speaker.beep(800, 10)
+                # self.speaker.beep(800, 10)
+            elif new_ultrasonic == lowest_ultrasonic:
+                new_lowest_ultrasonic_angle = self.drivebase.angle()
+                lowest_ultrasonic_angle = (new_lowest_ultrasonic_angle + lowest_ultrasonic_angle) // 2
 
             print(new_ultrasonic, self.drivebase.angle())
 
@@ -333,14 +336,15 @@ class Robot:
         self.drivebase.settings( # Slow down
             straight_speed=80,
             straight_acceleration=450,
-            turn_rate=140,
-            turn_acceleration=1600
+            turn_rate=49,
+            turn_acceleration=550
         )
 
         self.rotate_arm(-86, stop_method=Stop.HOLD) # Arm up
 
         self.move_forward(260) # Go to middle - 20 (because already moved forward 20)
         self.move_forward(-20) # Go back just in case hit the can
+        self.sharp_turn_in_degrees(360) # Turn 360 degrees to knock the can
         # self.hub.imu.reset_heading(0)
 
         self.stop_motors() # Stop
@@ -360,14 +364,14 @@ class Robot:
         self.sharp_turn_in_degrees(lowest_ultrasonic_angle) # Turn to the can
         distance_to_can = min(lowest_ultrasonic - 20, 260)
         self.move_forward(distance_to_can) # Go to the can
-        self.rotate_arm(-95, stop_method=Stop.COAST, wait=True) # Arm down, capture the can
+        self.rotate_arm(-135, stop_method=Stop.COAST, wait=True) # Arm down, capture the can
 
-        self.sharp_turn_in_degrees(180) # Turn to centre
-        self.move_forward(distance_to_can) # Move to centre
+        # self.sharp_turn_in_degrees(180) # Turn to centre
+        self.move_forward(-distance_to_can) # Move to centre
 
         # self.move_forward(max(-(lowest_ultrasonic - 20), -260)) # Go back to middle
 
-        return_to_exit_angle = -lowest_ultrasonic_angle
+        return_to_exit_angle = -lowest_ultrasonic_angle + 180
 
         # Use IMU heading to find return angle, doesn't work
         # return_to_exit_angle = -self.hub.imu.heading() + 180
@@ -376,7 +380,7 @@ class Robot:
 
         # self.sharp_turn_in_degrees(return_to_exit_angle * CONSTANTS["TURNING_WITH_WEIGHT_CORRECITON_MULTIPLIER"]) # Turn to exit
         self.sharp_turn_in_degrees(return_to_exit_angle) # Turn back, and face exit
-        self.move_forward(280) # Go to exit
+        self.move_forward(219) # Go to exit
 
         self.speaker.beep(523, 40)
         self.speaker.beep(587, 40)
@@ -384,7 +388,7 @@ class Robot:
         self.speaker.beep(587, 40)
         self.speaker.beep(523, 40)
 
-        away_can_angle = 50
+        away_can_angle = -64
         away_can_distance = 58
         self.sharp_turn_in_degrees(away_can_angle)
         self.move_forward(away_can_distance) # Go forward a bit so the can is not on the path
@@ -394,16 +398,42 @@ class Robot:
 
         self.settings_default() # Reset speed and settings
 
-        self.move_forward(30) # Hopefully sense the black line again
+        # GET BACK TO the line
+        self.move_forward(-35, wait=False)
+        
+        while not self.drivebase.done():
+            self.get_colors()
+            if self.left_color == Color.GREEN or self.right_color == Color.GREEN or self.left_color == Color.GRAY or self.right_color == Color.GRAY:
+                self.stop_motors()
+                break
+        
+        found = False
 
-    def avoid_obstacle(self):
-        # Beep twice when handling obstacle avoidance
-        self.beep(2, frequency=1000, duration=100)
-        self.stop_motors()
-        self.rotate_arm(-90)
-        self.sharp_turn_in_degrees(CONSTANTS["OBSTACLE_INITIAL_TURN_DEGREES"])
-        self.drivebase.curve(CONSTANTS["CURVE_RADIUS_OBSTACLE"], -CONSTANTS["OBSTACLE_TURN_DEGREES"], Stop.BRAKE, True)
-        self.start_motors(CONSTANTS["OBSTACLE_MOVE_SPEED"], CONSTANTS["OBSTACLE_MOVE_SPEED"])
+        self.turn_in_degrees(-50, radius=7)
+        while not self.drivebase.done():
+            self.get_colors()
+            if self.right_color == Color.BLACK:
+                self.stop_motors()
+                found = True
+                break
+        
+        if not found:
+            self.turn_in_degrees(50, radius=7)
+            while not self.drivebase.done():
+                self.get_colors()
+                if self.left_color == Color.BLACK:
+                    self.stop_motors()
+                    break
+
+    # UNUSED
+    # def avoid_obstacle(self):
+    #     # Beep twice when handling obstacle avoidance
+    #     self.beep(2, frequency=1000, duration=100)
+    #     self.stop_motors()
+    #     self.rotate_arm(-90)
+    #     self.sharp_turn_in_degrees(CONSTANTS["OBSTACLE_INITIAL_TURN_DEGREES"])
+    #     self.drivebase.curve(CONSTANTS["CURVE_RADIUS_OBSTACLE"], -CONSTANTS["OBSTACLE_TURN_DEGREES"], Stop.BRAKE, True)
+    #     self.start_motors(CONSTANTS["OBSTACLE_MOVE_SPEED"], CONSTANTS["OBSTACLE_MOVE_SPEED"])
 
         self.get_colors() # Re-read colors after turning
         while self.right_color == Color.WHITE: # Keep turning until right sensor sees something other than white
@@ -623,7 +653,24 @@ class Robot:
             self.robot_state = "line"
 
         # Turn / Green (prioritize green over line, and handle reflective tape)
-        elif self.left_color == Color.GREEN and self.right_color == Color.GREEN:
+        elif (self.left_color == Color.GREEN and self.right_color == Color.GREEN) or (self.left_color == Color.GRAY or self.right_color == Color.GRAY):
+            if self.left_color == Color.GRAY and self.right_color != Color.GRAY:
+                print("Left gray")
+                self.turn_in_degrees(-35, radius=7)
+                while not self.drivebase.done():
+                    print(self.right_color)
+                    self.get_colors()
+                    if self.right_color == Color.GRAY:
+                        self.stop_motors()
+                        break
+            elif self.right_color == Color.GRAY and self.left_color != Color.GRAY:
+                print("Right gray")
+                self.turn_in_degrees(35, radius=7)
+                while not self.drivebase.done():
+                    self.get_colors()
+                    if self.left_color == Color.GRAY:
+                        self.stop_motors()
+                        break            
             # Both green detected -> enter spill ending immediately
             self.robot_state = "green both"
             self.spill_ignore_line_until_ms = self.clock.time() + int(CONSTANTS.get("SPILL_IGNORE_LINE_MS", 1500))
@@ -657,7 +704,7 @@ class Robot:
         #     self.green_spill_ending()
        
         # Obstacle
-        if self.robot_state == "obstacle":
+        if self.robot_state == "obstacle" and False:
             self.avoid_obstacle()
             self.robot_state = "line"
             self.speaker.beep(300, 50)
@@ -690,13 +737,13 @@ class Robot:
 
     def debug(self):
         """Print debug text."""
-        print("STATE", self.robot_state)
-        # print("LEFT", self.left_color_sensor_information, self.left_color)
+        # print("STATE", self.robot_state)
+        print("LEFT", self.left_color_sensor_information, self.left_color)
         # print("RIGHT", self.right_color_sensor_information, self.right_color)
         # print(self.left_color, self.right_color)
         # print(self.iteration_count)
         # print(self.ultrasonic)
-        pass
+        # pass
 
     def run(self):
         self.battery_display()
