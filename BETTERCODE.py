@@ -99,17 +99,6 @@ class Robot:
             # Fail safely if speaker not available
             pass
 
-    def beep(self, times=1, frequency=1000, duration=100, gap=50):
-        """Play short beeps for audible feedback."""
-        try:
-            for i in range(int(times)):
-                self.hub.speaker.beep(int(frequency), int(duration))
-                if i < int(times) - 1:
-                    wait(int(gap))
-        except Exception:
-            # Fail safely if speaker not available
-            pass
-
     def settings_default(self):
         self.drivebase.settings(
             straight_speed=CONSTANTS["DEFAULT_SPEED"],
@@ -263,9 +252,9 @@ class Robot:
             self.turn_in_degrees(CONSTANTS["TURN_YELLOW_DEGREES"])
         elif (self.left_color == Color.BLACK or self.right_color == Color.BLACK):
             if self.shortcut_information["first turned"] == "left":
-                self.sharp_turn_in_degrees(-90)
+                self.sharp_turn_in_degrees(-75)
             else:
-                self.sharp_turn_in_degrees(90)
+                self.sharp_turn_in_degrees(75)
         else:
             self.move_forward(10, wait=False)
 
@@ -583,13 +572,13 @@ class Robot:
                 # Beep three times on detecting yellow line shortcut
                 self.beep(3, frequency=1000, duration=100)
                 if self.left_color == Color.YELLOW:
-                    self.turn_in_degrees(-90)
+                    self.turn_in_degrees(-75, wait=True)
 
                     if self.shortcut_information["first turned"] is None:
                         self.shortcut_information["first turned"] = "left"
 
-                if self.right_color == Color.YELLOW:
-                    self.turn_in_degrees(90)
+                elif self.right_color == Color.YELLOW:
+                    self.turn_in_degrees(75, wait=True)
 
                     if self.shortcut_information["first turned"] is None:
                         self.shortcut_information["first turned"] = "right"
